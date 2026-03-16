@@ -36,6 +36,7 @@ func main() {
 
 	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")
 	matchProducer := kafka.NewProducer([]string{"localhost:9092"}, "match.events")
+	dlqProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events.dlq")
 
 	rideService := rideapp.NewRideService(rideProducer)
 	matchingService := matching.NewMatchingService(matchProducer)
@@ -56,6 +57,7 @@ func main() {
 		[]string{"localhost:9092"},
 		"ride.events",
 		"matching-group",
+		dlqProducer,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,4 +104,5 @@ func main() {
 	consumer.Close()
 	rideProducer.Close()
 	matchProducer.Close()
+	dlqProducer.Close()
 }

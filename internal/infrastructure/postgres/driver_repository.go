@@ -15,6 +15,7 @@ type DriverRepository struct {
 func NewDriverRepository(db *sql.DB) *DriverRepository {
 	return &DriverRepository{db: db}
 }
+
 func (d *DriverRepository) GetAvailableDrivers(ctx context.Context) ([]*driver.Driver, error) {
 
 	query := `SELECT id, status FROM drivers WHERE status = 'ONLINE'`
@@ -41,6 +42,7 @@ func (d *DriverRepository) GetAvailableDrivers(ctx context.Context) ([]*driver.D
 
 	return drivers, nil
 }
+
 func (d *DriverRepository) GetByID(ctx context.Context, id uuid.UUID) (*driver.Driver, error) {
 
 	query := `SELECT id, status FROM drivers WHERE id=$1`
@@ -58,6 +60,7 @@ func (d *DriverRepository) GetByID(ctx context.Context, id uuid.UUID) (*driver.D
 
 	return &dr, nil
 }
+
 func (d *DriverRepository) Save(ctx context.Context, dr *driver.Driver) error {
 
 	query := `

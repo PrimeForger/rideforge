@@ -14,3 +14,12 @@ CREATE TABLE IF NOT EXISTS drivers (
 
 CREATE INDEX idx_rides_status ON rides(status);
 CREATE INDEX idx_drivers_status ON drivers(status);
+
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id UUID PRIMARY KEY,
+    aggregate_id UUID NOT NULL,
+    event_type TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMP NULL
+);
