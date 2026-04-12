@@ -29,7 +29,7 @@ func (s *RideService) RequestRide(ctx context.Context, passenger, pickup, dropof
 		RequestedAt: time.Now(),
 	}
 
-	event := events.Event{
+	event := events.Envelope{
 		ID:        uuid.NewString(),
 		Type:      ride.EventRideRequested,
 		Aggregate: rideID,
@@ -37,8 +37,7 @@ func (s *RideService) RequestRide(ctx context.Context, passenger, pickup, dropof
 		Occurred:  time.Now(),
 	}
 
-	err := s.producer.Publish(ctx, rideID, event)
-	if err != nil {
+	if err := s.producer.Publish(ctx, event); err != nil {
 		return "", err
 	}
 

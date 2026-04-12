@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -10,11 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
-	rideapp "github.com/ashadashraf/ride-hail-app/internal/application/ride"
+	"github.com/ashadashraf/ride-hail-app/internal/application/events"
 	"github.com/ashadashraf/ride-hail-app/internal/bootstrap"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/server"
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -27,37 +30,18 @@ func main() {
 	srv := server.NewServer(container.RideService)
 	srv.RegisterRoutes()
 
-	server := &http.Server{
+	httpServer := &http.Server{
 		Addr:         ":8080",
 		Handler:      nil,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
-	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")
-	matchProducer := kafka.NewProducer([]string{"localhost:9092"}, "match.events")
-	dlqProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events.dlq")
-
-	rideService := rideapp.NewRideService(rideProducer)
-	matchingService := matching.NewMatchingService(matchProducer)
-
-	rideID, err := rideService.RequestRide(
-		context.Background(),
-		"john",
-		"airport",
-		"hotel",
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println("Ride requested", rideID)
-
 	consumer := kafka.NewConsumer(
 		[]string{"localhost:9092"},
 		"ride.events",
 		"matching-group",
-		dlqProducer,
+		container.DLQProducer,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,7 +55,7 @@ func main() {
 		defer wg.Done()
 
 		log.Println("HTTP server running on :8080")
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()
@@ -79,10 +63,68 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := consumer.Consume(ctx, matchingService.HandleRideRequested)
+		err := consumer.Consume(ctx, func(ctx context.Context, msg []byte) error {
+
+			var envelope events.Envelope
+			if err := json.Unmarshal(msg, &envelope); err != nil {
+				return err
+			}
+
+			eventID, err := uuid.Parse(envelope.ID)
+			if err != nil {
+				return err
+			}
+
+			return container.TxManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+				// IDEMPOTENCY CHECK
+				inserted, err := container.ProcessedEventRepo.InsertIfNotExists(
+					ctx,
+					tx,
+					eventID,
+					"matching-service",
+				)
+				if err != nil {
+					return err
+				}
+
+				if !inserted {
+					log.Println("duplicate event skipped:", envelope.ID)
+					return nil
+				}
+
+				// ROUTE BASED ON EVENT TYPE
+				switch envelope.Type {
+
+				case "ride.requested":
+					var data struct {
+						RideID string `json:"ride_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					return container.MatchingService.MatchRide(ctx, data.RideID)
+
+				default:
+					return nil
+				}
+			})
+		})
+
 		if err != nil && ctx.Err() == nil {
 			log.Println("consumer error:", err)
 		}
+	}()
+
+	outboxWorker := outbox.NewWorker(container.OutboxRepo, container.TxManager, container.RideProducer)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		outboxWorker.Start(ctx)
 	}()
 
 	// Graceful shutdown
@@ -97,12 +139,12 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	server.Shutdown(shutdownCtx)
+	httpServer.Shutdown(shutdownCtx)
 
 	wg.Wait()
 
 	consumer.Close()
-	rideProducer.Close()
-	matchProducer.Close()
-	dlqProducer.Close()
+	container.RideProducer.Close()
+	container.MatchProducer.Close()
+	container.DLQProducer.Close()
 }

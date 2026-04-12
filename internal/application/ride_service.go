@@ -2,27 +2,39 @@ package application
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"time"
 
+	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/region"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 )
 
 type RideService struct {
 	rideRepo ports.RideRepository
-	eventBus ports.EventBus
+	// eventBus ports.EventBus
+	txManager  *postgres.TxManager
+	outboxRepo ports.OutboxRepository
 }
 
 func NewRideService(
 	rideRepo ports.RideRepository,
-	eventBus ports.EventBus,
+	// eventBus ports.EventBus,
+	txManager *postgres.TxManager,
+	outboxRepo ports.OutboxRepository,
 ) *RideService {
 	return &RideService{
 		rideRepo: rideRepo,
-		eventBus: eventBus,
+		// eventBus: eventBus,
+		txManager:  txManager,
+		outboxRepo: outboxRepo,
 	}
 }
 
@@ -41,14 +53,35 @@ func (s *RideService) CreateRide(
 	// 2. Create domain aggregate
 	r := ride.NewRide(req.RiderID)
 
-	// 3. Save to repository
-	if err := s.rideRepo.Save(ctx, r); err != nil {
-		return uuid.Nil, err
-	}
+	err := s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
 
-	// 4. Emit event
-	event := events.RideRequested{RideID: r.ID}
-	if err := s.eventBus.Publish(ctx, event); err != nil {
+		// 3. Save to repository
+		if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
+			return err
+		}
+
+		// 4. Emit event
+		domainEvent := events.RideRequestedEvent{RideID: r.ID}
+
+		envelope := appevents.Envelope{
+			ID:        uuid.NewString(),
+			Type:      domainEvent.Name(),
+			Aggregate: r.ID.String(),
+			Data:      domainEvent,
+			Occurred:  time.Now(),
+		}
+
+		payload, err := json.Marshal(envelope)
+		if err != nil {
+			return err
+		}
+
+		outboxEvent := outbox.NewEvent(r.ID, envelope.Type, payload)
+
+		return s.outboxRepo.Insert(ctx, tx, outboxEvent)
+	})
+
+	if err != nil {
 		return uuid.Nil, err
 	}
 
@@ -60,23 +93,42 @@ func (s *RideService) AssignDriver(
 	req AssignDriverRequest,
 ) error {
 
-	r, err := s.rideRepo.GetByID(ctx, req.RideID)
-	if err != nil {
-		return err
-	}
+	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
 
-	if err := r.AssignDriver(req.DriverID); err != nil {
-		return err
-	}
+		// Fetch inside transaction
+		r, err := s.rideRepo.GetByIDTx(ctx, tx, req.RideID)
+		if err != nil {
+			return err
+		}
 
-	if err := s.rideRepo.Save(ctx, r); err != nil {
-		return err
-	}
+		if err := r.AssignDriver(req.DriverID); err != nil {
+			return err
+		}
 
-	event := events.RideAccepted{
-		RideID:   r.ID,
-		DriverID: req.DriverID,
-	}
+		if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
+			return err
+		}
 
-	return s.eventBus.Publish(ctx, event)
+		domainEvent := events.RideAcceptedEvent{
+			RideID:   r.ID,
+			DriverID: req.DriverID,
+		}
+
+		envelope := appevents.Envelope{
+			ID:        uuid.NewString(),
+			Type:      domainEvent.Name(),
+			Aggregate: r.ID.String(),
+			Data:      domainEvent,
+			Occurred:  time.Now(),
+		}
+
+		payload, err := json.Marshal(envelope)
+		if err != nil {
+			return err
+		}
+
+		outboxEvent := outbox.NewEvent(r.ID, envelope.Type, payload)
+
+		return s.outboxRepo.Insert(ctx, tx, outboxEvent)
+	})
 }

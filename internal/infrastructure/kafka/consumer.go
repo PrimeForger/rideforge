@@ -57,7 +57,9 @@ func (c *Consumer) Consume(ctx context.Context, handler func(context.Context, []
 
 			data, _ := json.Marshal(dlqEvent)
 
-			_ = c.dlqProducer.Publish(ctx, "dlq", data)
+			if err := c.dlqProducer.PublishRaw(ctx, "dlq", data); err != nil {
+				log.Println("failed to publish DLQ:", err)
+			}
 
 			// commit so it doesn't retry forever
 			if err := c.reader.CommitMessages(ctx, msg); err != nil {

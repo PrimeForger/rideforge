@@ -6,19 +6,19 @@ type Event interface {
 	Name() string
 }
 
-type RideRequested struct {
+type RideRequestedEvent struct {
 	RideID uuid.UUID
 }
 
-func (e RideRequested) Name() string {
+func (e RideRequestedEvent) Name() string {
 	return "ride.requested"
 }
 
-type RideAccepted struct {
+type RideAcceptedEvent struct {
 	RideID   uuid.UUID
 	DriverID uuid.UUID
 }
 
-func (e RideAccepted) Name() string {
+func (e RideAcceptedEvent) Name() string {
 	return "ride.accepted"
 }

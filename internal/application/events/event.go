@@ -2,7 +2,7 @@ package events
 
 import "time"
 
-type Event struct {
+type Envelope struct {
 	ID        string      `json:"id"`
 	Type      string      `json:"type"`
 	Aggregate string      `json:"aggregate"`

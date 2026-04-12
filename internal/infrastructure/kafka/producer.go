@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/events"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -23,15 +24,23 @@ func NewProducer(brokers []string, topic string) *Producer {
 	}
 }
 
-func (p *Producer) Publish(ctx context.Context, key string, value interface{}) error {
-	data, err := json.Marshal(value)
+func (p *Producer) Publish(ctx context.Context, event events.Envelope) error {
+	data, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
 
 	return p.writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(key),
+		Key:   []byte(event.Type),
 		Value: data,
+		Time:  time.Now(),
+	})
+}
+
+func (p *Producer) PublishRaw(ctx context.Context, key string, value []byte) error {
+	return p.writer.WriteMessages(ctx, kafka.Message{
+		Key:   []byte(key),
+		Value: value,
 		Time:  time.Now(),
 	})
 }
