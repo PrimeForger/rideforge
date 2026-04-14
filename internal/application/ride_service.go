@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
@@ -93,42 +94,60 @@ func (s *RideService) AssignDriver(
 	req AssignDriverRequest,
 ) error {
 
-	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+	const maxRetries = 3
 
-		// Fetch inside transaction
-		r, err := s.rideRepo.GetByIDTx(ctx, tx, req.RideID)
-		if err != nil {
-			return err
+	for i := 0; i < maxRetries; i++ {
+
+		err := s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+			// Fetch inside transaction
+			r, err := s.rideRepo.GetByIDTx(ctx, tx, req.RideID)
+			if err != nil {
+				return err
+			}
+
+			if err := r.AssignDriver(req.DriverID); err != nil {
+				return err
+			}
+
+			if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
+				return err
+			}
+
+			domainEvent := events.RideAcceptedEvent{
+				RideID:   r.ID,
+				DriverID: req.DriverID,
+			}
+
+			envelope := appevents.Envelope{
+				ID:        uuid.NewString(),
+				Type:      domainEvent.Name(),
+				Aggregate: r.ID.String(),
+				Data:      domainEvent,
+				Occurred:  time.Now(),
+			}
+
+			payload, err := json.Marshal(envelope)
+			if err != nil {
+				return err
+			}
+
+			outboxEvent := outbox.NewEvent(r.ID, envelope.Type, payload)
+
+			return s.outboxRepo.Insert(ctx, tx, outboxEvent)
+		})
+
+		if err == nil {
+			return nil
 		}
 
-		if err := r.AssignDriver(req.DriverID); err != nil {
-			return err
+		if errors.Is(err, ErrOptimisticLockConflict) {
+			log.Println("retrying due to optimistic lock conflict")
+			continue
 		}
 
-		if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
-			return err
-		}
+		return err
+	}
 
-		domainEvent := events.RideAcceptedEvent{
-			RideID:   r.ID,
-			DriverID: req.DriverID,
-		}
-
-		envelope := appevents.Envelope{
-			ID:        uuid.NewString(),
-			Type:      domainEvent.Name(),
-			Aggregate: r.ID.String(),
-			Data:      domainEvent,
-			Occurred:  time.Now(),
-		}
-
-		payload, err := json.Marshal(envelope)
-		if err != nil {
-			return err
-		}
-
-		outboxEvent := outbox.NewEvent(r.ID, envelope.Type, payload)
-
-		return s.outboxRepo.Insert(ctx, tx, outboxEvent)
-	})
+	return errors.New("failed to assign driver after retries")
 }
