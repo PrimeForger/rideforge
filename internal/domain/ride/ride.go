@@ -12,6 +12,7 @@ type Ride struct {
 	DriverID  uuid.UUID
 	RiderID   uuid.UUID
 	Status    Status
+	Version   int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
