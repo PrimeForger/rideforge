@@ -47,3 +47,7 @@ func (r *Ride) AssignDriver(driverID uuid.UUID) error {
 	r.DriverID = driverID
 	return r.Transition(StatusAccepted)
 }
+
+func (r *Ride) StartMatching() error {
+	return r.Transition(StatusMatching)
+}

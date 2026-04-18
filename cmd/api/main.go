@@ -70,12 +70,12 @@ func main() {
 				return err
 			}
 
-			eventID, err := uuid.Parse(envelope.ID)
-			if err != nil {
-				return err
-			}
-
 			return container.TxManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+				eventID, err := uuid.Parse(envelope.ID)
+				if err != nil {
+					return err
+				}
 
 				// IDEMPOTENCY CHECK
 				inserted, err := container.ProcessedEventRepo.InsertIfNotExists(
@@ -106,7 +106,7 @@ func main() {
 						return err
 					}
 
-					return container.MatchingService.MatchRide(ctx, data.RideID)
+					return container.MatchingService.MatchRide(ctx, tx, data.RideID)
 
 				default:
 					return nil

@@ -94,6 +94,7 @@ func (s *RideService) AssignDriver(
 	req AssignDriverRequest,
 ) error {
 
+	var ErrOptimisticLockConflict = errors.New("optimistic lock conflict")
 	const maxRetries = 3
 
 	for i := 0; i < maxRetries; i++ {
@@ -150,4 +151,24 @@ func (s *RideService) AssignDriver(
 	}
 
 	return errors.New("failed to assign driver after retries")
+}
+
+func (s *RideService) StartMatching(
+	ctx context.Context,
+	rideID uuid.UUID,
+) error {
+
+	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+		r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
+		if err != nil {
+			return err
+		}
+
+		if err := r.StartMatching(); err != nil {
+			return err
+		}
+
+		return s.rideRepo.SaveTx(ctx, tx, r)
+	})
 }

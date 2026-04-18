@@ -40,8 +40,9 @@ func (r *RideRepository) Save(ctx context.Context, rideEntity *ride.Ride) error 
 	return err
 }
 
+var ErrOptimisticLockConflict = errors.New("optimistic lock conflict")
+
 func (r *RideRepository) SaveTx(ctx context.Context, tx *sql.Tx, rideEntity *ride.Ride) error {
-	var ErrOptimisticLockConflict = errors.New("optimistic lock conflict")
 
 	// CASE 1: New Ride
 	if rideEntity.Version == 0 {
