@@ -10,12 +10,26 @@ CREATE TABLE IF NOT EXISTS rides (
 
 CREATE TABLE IF NOT EXISTS drivers (
     id UUID PRIMARY KEY,
+    reserved_for_ride UUID NULL,
+    reserved_at TIMESTAMP NULL,
     status VARCHAR(20) NOT NULL
 );
 
 CREATE INDEX idx_rides_status ON rides(status);
 CREATE INDEX idx_rides_id_version ON rides(id, version);
 CREATE INDEX idx_drivers_status ON drivers(status);
+
+CREATE TABLE ride_driver_offers (
+    ride_id UUID NOT NULL,
+    driver_id UUID NOT NULL,
+    status VARCHAR(20) NOT NULL, -- OFFERED, REJECTED, ACCEPTED
+    attempt INT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+
+    PRIMARY KEY (ride_id, driver_id)
+);
+
+CREATE INDEX idx_ride_offers_ride ON ride_driver_offers(ride_id);
 
 CREATE TABLE IF NOT EXISTS outbox_events (
     id UUID PRIMARY KEY,

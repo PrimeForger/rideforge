@@ -106,7 +106,90 @@ func main() {
 						return err
 					}
 
-					return container.MatchingService.MatchRide(ctx, tx, data.RideID)
+					rideID, _ := uuid.Parse(data.RideID)
+
+					return container.RideService.StartMatchingTx(ctx, tx, rideID)
+
+				case "matching.started":
+
+					var data struct {
+						RideID string `json:"ride_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+
+					return container.MatchingEngine.HandleMatchingStarted(ctx, tx, rideID)
+
+				case "matching.retry":
+
+					var data struct {
+						RideID string `json:"ride_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+
+					return container.MatchingEngine.HandleMatchingStarted(ctx, tx, rideID)
+
+				case "driver.accepted":
+
+					var data struct {
+						RideID   string `json:"ride_id"`
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					return container.DriverResponseService.HandleDriverAccepted(ctx, tx, rideID, driverID)
+
+				case "driver.rejected":
+
+					var data struct {
+						RideID   string `json:"ride_id"`
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					return container.DriverResponseService.HandleDriverRejected(ctx, tx, rideID, driverID)
+
+				case "driver.timeout":
+
+					var data struct {
+						RideID   string `json:"ride_id"`
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					return container.DriverResponseService.HandleDriverRejected(ctx, tx, rideID, driverID)
 
 				default:
 					return nil
@@ -121,10 +204,15 @@ func main() {
 
 	outboxWorker := outbox.NewWorker(container.OutboxRepo, container.TxManager, container.RideProducer)
 
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		outboxWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		container.TimeoutScheduler.Start(ctx)
 	}()
 
 	// Graceful shutdown

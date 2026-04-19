@@ -153,22 +153,40 @@ func (s *RideService) AssignDriver(
 	return errors.New("failed to assign driver after retries")
 }
 
-func (s *RideService) StartMatching(
+func (s *RideService) StartMatchingTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	rideID uuid.UUID,
 ) error {
 
-	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+	r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
+	if err != nil {
+		return err
+	}
 
-		r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
-		if err != nil {
-			return err
-		}
+	if err := r.StartMatching(); err != nil {
+		return err
+	}
 
-		if err := r.StartMatching(); err != nil {
-			return err
-		}
+	if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
+		return err
+	}
 
-		return s.rideRepo.SaveTx(ctx, tx, r)
-	})
+	domainEvent := events.MatchingStartedEvent{
+		RideID: rideID,
+	}
+
+	envelope := appevents.Envelope{
+		ID:        uuid.NewString(),
+		Type:      domainEvent.Name(),
+		Aggregate: rideID.String(),
+		Data:      domainEvent,
+		Occurred:  time.Now(),
+	}
+
+	payload, _ := json.Marshal(envelope)
+
+	return s.outboxRepo.Insert(ctx, tx,
+		outbox.NewEvent(rideID, envelope.Type, payload),
+	)
 }

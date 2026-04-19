@@ -17,18 +17,22 @@ import (
 type MatchingService struct {
 	driverRepo ports.DriverRepository
 	rideSvc    *RideService
+	outboxRepo ports.OutboxRepository
 }
 
 func NewMatchingService(
 	driverRepo ports.DriverRepository,
 	rideSvc *RideService,
+	outboxRepo ports.OutboxRepository,
 ) *MatchingService {
 	return &MatchingService{
 		driverRepo: driverRepo,
 		rideSvc:    rideSvc,
+		outboxRepo: outboxRepo,
 	}
 }
 
+// Made for V1 Matching Engine(can be used for testing)
 func (m *MatchingService) MatchRide(
 	ctx context.Context,
 	tx *sql.Tx,
