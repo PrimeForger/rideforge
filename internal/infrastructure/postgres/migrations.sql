@@ -12,7 +12,15 @@ CREATE TABLE IF NOT EXISTS drivers (
     id UUID PRIMARY KEY,
     reserved_for_ride UUID NULL,
     reserved_at TIMESTAMP NULL,
-    status VARCHAR(20) NOT NULL
+    status VARCHAR(20) NOT NULL,
+    rating FLOAT DEFAULT 5.0,
+    acceptance_rate FLOAT DEFAULT 1.0,
+    cancellation_rate FLOAT DEFAULT 0.0,
+    timeout_rate FLOAT DEFAULT 0.0,
+    completed_rides INT DEFAULT 0,
+    last_assigned_at TIMESTAMP NULL,
+    lat DOUBLE PRECISION DEFAULT 0,
+    lng DOUBLE PRECISION DEFAULT 0
 );
 
 CREATE INDEX idx_rides_status ON rides(status);
@@ -22,7 +30,7 @@ CREATE INDEX idx_drivers_status ON drivers(status);
 CREATE TABLE ride_driver_offers (
     ride_id UUID NOT NULL,
     driver_id UUID NOT NULL,
-    status VARCHAR(20) NOT NULL, -- OFFERED, REJECTED, ACCEPTED
+    status VARCHAR(20) NOT NULL, -- OFFERED, REJECTED, ACCEPTED, TIMEOUT
     attempt INT NOT NULL,
     created_at TIMESTAMP DEFAULT NOW(),
 
