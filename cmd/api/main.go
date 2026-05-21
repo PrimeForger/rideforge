@@ -110,6 +110,21 @@ func main() {
 
 					return container.RideService.StartMatchingTx(ctx, tx, rideID)
 
+				case "ride.accepted":
+
+					var data struct {
+						RideID string `json:"ride_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+
+					return container.RideEventHandler.HandleRideAccepted(ctx, rideID)
+
 				case "matching.started":
 
 					var data struct {
@@ -139,6 +154,70 @@ func main() {
 					rideID, _ := uuid.Parse(data.RideID)
 
 					return container.MatchingEngine.HandleMatchingStarted(ctx, tx, rideID)
+
+				case "driver.online":
+
+					var data struct {
+						DriverID string  `json:"driver_id"`
+						Lat      float64 `json:"lat"`
+						Lng      float64 `json:"lng"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					return container.GeoService.UpdateDriverLocation(ctx, driverID, data.Lat, data.Lng)
+
+				case "driver.offline":
+
+					var data struct {
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					// Remove from GEO
+					if err := container.GeoService.RemoveDriver(ctx, driverID); err != nil {
+						return err
+					}
+
+					// Force release lock
+					if err := container.DriverLocker.ForceRelease(ctx, driverID); err != nil {
+						return err
+					}
+
+					return nil
+
+				case "driver.offered":
+
+					var data struct {
+						RideID   string `json:"ride_id"`
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					offerTimeout := container.Config.DriverOfferTimeout // e.g. 10 seconds
+					if err := container.TimeoutScheduler.Schedule(ctx, rideID, driverID, offerTimeout); err != nil {
+						return err
+					}
+
+					return container.DriverCache.MarkDriverOffered(ctx, rideID, driverID)
 
 				case "driver.accepted":
 
@@ -174,6 +253,23 @@ func main() {
 
 					return container.DriverResponseService.HandleDriverRejected(ctx, tx, rideID, driverID)
 
+				case "driver.rejected.processed":
+
+					var data struct {
+						RideID   string `json:"ride_id"`
+						DriverID string `json:"driver_id"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					rideID, _ := uuid.Parse(data.RideID)
+					driverID, _ := uuid.Parse(data.DriverID)
+
+					return container.RideEventHandler.HandleDriverRejected(ctx, rideID, driverID)
+
 				case "driver.timeout":
 
 					var data struct {
@@ -189,7 +285,7 @@ func main() {
 					rideID, _ := uuid.Parse(data.RideID)
 					driverID, _ := uuid.Parse(data.DriverID)
 
-					return container.DriverResponseService.HandleDriverRejected(ctx, tx, rideID, driverID)
+					return container.DriverResponseService.HandleDriverTimeout(ctx, tx, rideID, driverID)
 
 				default:
 					return nil

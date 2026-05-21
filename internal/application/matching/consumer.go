@@ -1,16 +1,16 @@
 package matching
 
-import (
-	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
-)
+// import (
+// 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
+// )
 
-type MatchingService struct {
-	producer *kafka.Producer
-}
+// type MatchingService struct {
+// 	producer *kafka.Producer
+// }
 
-func NewMatchingService(producer *kafka.Producer) *MatchingService {
-	return &MatchingService{producer: producer}
-}
+// func NewMatchingService(producer *kafka.Producer) *MatchingService {
+// 	return &MatchingService{producer: producer}
+// }
 
 // func (m *MatchingService) HandleRideRequested(ctx context.Context, message []byte) error {
 // 	var event events.Envelope

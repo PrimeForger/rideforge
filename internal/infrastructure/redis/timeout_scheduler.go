@@ -47,10 +47,24 @@ func (s *TimeoutScheduler) Schedule(
 	member := rideID.String() + ":" + driverID.String()
 	score := float64(time.Now().Add(timeout).Unix())
 
-	return s.rdb.ZAdd(ctx, redisKey, redis.Z{
+	rideKey := "ride_timeouts:" + rideID.String()
+
+	pipe := s.rdb.TxPipeline()
+
+	// Add to global timeout ZSET
+	pipe.ZAdd(ctx, redisKey, redis.Z{
 		Score:  score,
 		Member: member,
-	}).Err()
+	})
+
+	// Track driver under this ride (for CancelAll)
+	pipe.SAdd(ctx, rideKey, driverID.String())
+
+	// Set TTL to auto cleanup
+	pipe.Expire(ctx, rideKey, timeout+10*time.Second)
+
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (s *TimeoutScheduler) Cancel(
@@ -62,6 +76,36 @@ func (s *TimeoutScheduler) Cancel(
 	member := rideID.String() + ":" + driverID.String()
 
 	return s.rdb.ZRem(ctx, redisKey, member).Err()
+}
+
+func (s *TimeoutScheduler) CancelAll(
+	ctx context.Context,
+	rideID uuid.UUID,
+) error {
+
+	key := "ride_timeouts:" + rideID.String()
+
+	driverIDs, err := s.rdb.SMembers(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+
+	if len(driverIDs) == 0 {
+		return nil
+	}
+
+	var members []string
+	for _, d := range driverIDs {
+		members = append(members, rideID.String()+":"+d)
+	}
+
+	pipe := s.rdb.TxPipeline()
+
+	pipe.ZRem(ctx, redisKey, members)
+	pipe.Del(ctx, key)
+
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (s *TimeoutScheduler) Start(ctx context.Context) {
