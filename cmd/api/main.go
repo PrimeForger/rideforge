@@ -27,7 +27,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := server.NewServer(container.RideService)
+	srv := server.NewServer(
+		container.RideService,
+		container.DriverResponseCommandService,
+	)
+
 	srv.RegisterRoutes()
 
 	httpServer := &http.Server{
@@ -211,13 +215,7 @@ func main() {
 
 					rideID, _ := uuid.Parse(data.RideID)
 					driverID, _ := uuid.Parse(data.DriverID)
-
-					offerTimeout := container.Config.DriverOfferTimeout // e.g. 10 seconds
-					if err := container.TimeoutScheduler.Schedule(ctx, rideID, driverID, offerTimeout); err != nil {
-						return err
-					}
-
-					return container.DriverCache.MarkDriverOffered(ctx, rideID, driverID)
+					return container.DriverOfferHandler.HandleDriverOffered(ctx, rideID, driverID)
 
 				case "driver.accepted":
 

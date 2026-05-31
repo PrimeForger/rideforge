@@ -6,29 +6,30 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/realtime"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 )
 
 type Container struct {
-	RideService           *application.RideService
-	MatchingEngine        *application.MatchingEngine
-	DriverService         *application.DriverService
-	DriverResponseService *application.DriverResponseService
-	GeoService            *redis.GeoService
-	DriverCache           *redis.DriverCache
+	RideService                  *application.RideService
+	MatchingEngine               *application.MatchingEngine
+	DriverService                *application.DriverService
+	DriverResponseService        *application.DriverResponseService
+	DriverResponseCommandService *application.DriverResponseCommandService
+	GeoService                   *redis.GeoService
 
 	OutboxRepo         ports.OutboxRepository
 	ProcessedEventRepo *postgres.ProcessedEventRepository
 	DriverLocker       ports.DriverLocker
 	TxManager          *postgres.TxManager
 
-	TimeoutScheduler *redis.TimeoutScheduler
-	RideEventHandler *matching.RideEventHandler
-	Config           *config.Config
-	RideProducer     *kafka.Producer
-	MatchProducer    *kafka.Producer
-	DLQProducer      *kafka.Producer
+	TimeoutScheduler   *redis.TimeoutScheduler
+	RideEventHandler   *matching.RideEventHandler
+	DriverOfferHandler *matching.DriverOfferHandler
+	RideProducer       *kafka.Producer
+	MatchProducer      *kafka.Producer
+	DLQProducer        *kafka.Producer
 }
 
 func NewContainer() (*Container, error) {
@@ -66,6 +67,9 @@ func NewContainer() (*Container, error) {
 	matchProducer := kafka.NewProducer([]string{"localhost:9092"}, "match.events")
 	dlqProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events.dlq")
 
+	// -- Real-Time Services ---
+	driverOfferGateway := realtime.NewDriverOfferGateway()
+
 	// --- Application Utilities (Ranking Engine) ---
 	rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
 
@@ -74,27 +78,29 @@ func NewContainer() (*Container, error) {
 	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, rankingEngine, cfg)
 	driverService := application.NewDriverService(driverRepo, driverLocker, txManager, outboxRepo, geoService)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo)
+	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
 	// idempotencyService := application.NewIdempotencyService(db)
 
 	//Handlers
 	rideEventHandler := matching.NewRideEventHandler(timeoutScheduler)
+	driverOfferHandler := matching.NewDriverOfferHandler(driverCache, timeoutScheduler, driverOfferGateway, cfg)
 
 	return &Container{
-		RideService:           rideService,
-		MatchingEngine:        matchingEngine,
-		DriverService:         driverService,
-		DriverResponseService: driverResponseService,
-		GeoService:            geoService,
-		DriverCache:           driverCache,
-		OutboxRepo:            outboxRepo,
-		ProcessedEventRepo:    processedEventRepo,
-		DriverLocker:          driverLocker,
-		TxManager:             txManager,
-		RideEventHandler:      rideEventHandler,
-		TimeoutScheduler:      timeoutScheduler,
-		Config:                cfg,
-		RideProducer:          rideProducer,
-		MatchProducer:         matchProducer,
-		DLQProducer:           dlqProducer,
+		RideService:                  rideService,
+		MatchingEngine:               matchingEngine,
+		DriverService:                driverService,
+		DriverResponseService:        driverResponseService,
+		DriverResponseCommandService: driverResponseCommandService,
+		GeoService:                   geoService,
+		OutboxRepo:                   outboxRepo,
+		ProcessedEventRepo:           processedEventRepo,
+		DriverLocker:                 driverLocker,
+		TxManager:                    txManager,
+		TimeoutScheduler:             timeoutScheduler,
+		RideEventHandler:             rideEventHandler,
+		DriverOfferHandler:           driverOfferHandler,
+		RideProducer:                 rideProducer,
+		MatchProducer:                matchProducer,
+		DLQProducer:                  dlqProducer,
 	}, nil
 }

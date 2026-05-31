@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -48,12 +49,54 @@ func (s *DriverResponseService) HandleDriverAccepted(
 		return err
 	}
 
+	// Already accepted by another driver.
+	if r.Status == ride.StatusAccepted {
+		return nil
+	}
+
+	if r.Status != ride.StatusMatching {
+		return errors.New("ride is not in matching state")
+	}
+
+	// Mark this offer accepted.
+	if err := s.driverRepo.MarkDriverAcceptedTx(
+		ctx,
+		tx,
+		rideID,
+		driverID,
+	); err != nil {
+		return err
+	}
+
+	// Get other active offered drivers before expiring them.
+	otherDrivers, err := s.driverRepo.GetActiveOfferDriversTx(ctx, tx, rideID, driverID)
+	if err != nil {
+		return err
+	}
+
 	if err := r.AssignDriver(driverID); err != nil {
 		return err
 	}
 
 	if err := s.rideRepo.SaveTx(ctx, tx, r); err != nil {
 		return err
+	}
+
+	// Winner becomes BUSY.
+	if err := s.driverRepo.MarkDriverBusyTx(ctx, tx, driverID); err != nil {
+		return err
+	}
+
+	// Expire loser offers.
+	if err := s.driverRepo.ExpireOtherOffersTx(ctx, tx, rideID, driverID); err != nil {
+		return err
+	}
+
+	// Release other reserved drivers.
+	for _, otherDriverID := range otherDrivers {
+		if _, err := s.locker.ReleaseTx(ctx, tx, otherDriverID, rideID); err != nil {
+			return err
+		}
 	}
 
 	event := events.RideAcceptedEvent{
@@ -69,7 +112,10 @@ func (s *DriverResponseService) HandleDriverAccepted(
 		Occurred:  time.Now(),
 	}
 
-	payload, _ := json.Marshal(envelope)
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
 
 	return s.outboxRepo.Insert(ctx, tx,
 		outbox.NewEvent(rideID, envelope.Type, payload),
