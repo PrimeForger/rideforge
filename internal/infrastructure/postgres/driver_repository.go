@@ -247,6 +247,23 @@ func (r *DriverRepository) InsertRideOfferTx(
 	return err
 }
 
+func (r *DriverRepository) MarkDriverAcceptedTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+) error {
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE ride_driver_offers
+		SET status = $3
+		WHERE ride_id = $1 AND driver_id = $2
+		AND status = $4
+	`, rideID, driverID, ride.OfferStatusAccepted, ride.OfferStatusOffered)
+
+	return err
+}
+
 func (r *DriverRepository) MarkDriverRejectedTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -295,4 +312,89 @@ func (r *DriverRepository) CountRideAttemptsTx(
 	).Scan(&count)
 
 	return count, err
+}
+
+func (r *DriverRepository) UpdateOfferStatusTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+	status ride.OfferStatus,
+) error {
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE ride_driver_offers
+		SET status = $3
+		WHERE ride_id = $1 AND driver_id = $2
+	`, rideID, driverID, string(status))
+
+	return err
+}
+
+func (r *DriverRepository) GetActiveOfferDriversTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	rideID uuid.UUID,
+	excludeDriverID uuid.UUID,
+) ([]uuid.UUID, error) {
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT driver_id
+		FROM ride_driver_offers
+		WHERE ride_id = $1
+		AND driver_id <> $2
+		AND status = 'OFFERED'
+	`, rideID, excludeDriverID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}
+
+func (r *DriverRepository) ExpireOtherOffersTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	rideID uuid.UUID,
+	acceptedDriverID uuid.UUID,
+) error {
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE ride_driver_offers
+		SET status = 'EXPIRED'
+		WHERE ride_id = $1
+		AND driver_id <> $2
+		AND status = 'OFFERED'
+	`, rideID, acceptedDriverID)
+
+	return err
+}
+
+func (r *DriverRepository) MarkDriverBusyTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	driverID uuid.UUID,
+) error {
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE drivers
+		SET status = 'BUSY',
+			reserved_for_ride = NULL,
+			reserved_at = NULL
+		WHERE id = $1
+	`, driverID)
+
+	return err
 }

@@ -10,21 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
-type Server struct {
+type RideHandler struct {
 	rideService *application.RideService
 }
 
-func NewServer(rideService *application.RideService) *Server {
-	return &Server{
+func NewRideHandler(
+	rideService *application.RideService,
+) *RideHandler {
+	return &RideHandler{
 		rideService: rideService,
 	}
 }
 
-func (s *Server) RegisterRoutes() {
-	http.HandleFunc("/rides", s.createRide)
-}
-
-func (s *Server) createRide(w http.ResponseWriter, r *http.Request) {
+func (h *RideHandler) CreateRide(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
 	var req struct {
 		RiderID string `json:"rider_id"`
@@ -34,6 +36,7 @@ func (s *Server) createRide(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	riderUUID, err := uuid.Parse(req.RiderID)
@@ -42,7 +45,7 @@ func (s *Server) createRide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rideID, err := s.rideService.CreateRide(
+	rideID, err := h.rideService.CreateRide(
 		context.Background(),
 		application.CreateRideRequest{
 			RiderID: riderUUID,
@@ -56,10 +59,7 @@ func (s *Server) createRide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]string{
+	writeJSON(w, http.StatusCreated, map[string]string{
 		"ride_id": rideID.String(),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	})
 }
