@@ -19,6 +19,7 @@ func NewServer(
 	return &Server{
 		rideHandler:   NewRideHandler(rideService),
 		driverHandler: NewDriverHandler(driverResponseCommandService),
+	}
 }
 
 func (s *Server) RegisterRoutes() {
