@@ -29,6 +29,7 @@ func main() {
 
 	srv := server.NewServer(
 		container.RideService,
+		container.DriverService,
 		container.DriverResponseCommandService,
 	)
 
@@ -174,7 +175,11 @@ func main() {
 
 					driverID, _ := uuid.Parse(data.DriverID)
 
-					return container.GeoService.UpdateDriverLocation(ctx, driverID, data.Lat, data.Lng)
+					if err := container.GeoService.UpdateDriverLocation(ctx, driverID, data.Lat, data.Lng); err != nil {
+						return err
+					}
+
+					return container.DriverCache.MarkOnline(ctx, driverID, data.Lat, data.Lng)
 
 				case "driver.offline":
 
@@ -191,6 +196,10 @@ func main() {
 
 					// Remove from GEO
 					if err := container.GeoService.RemoveDriver(ctx, driverID); err != nil {
+						return err
+					}
+
+					if err := container.DriverCache.MarkOffline(ctx, driverID); err != nil {
 						return err
 					}
 

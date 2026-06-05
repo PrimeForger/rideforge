@@ -156,3 +156,44 @@ func (c *DriverCache) GetOfferedDrivers(
 
 	return set, nil
 }
+
+func (c *DriverCache) UpdateDriverLocation(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+) error {
+	key := "driver:" + driverID.String()
+
+	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+		"lat":        lat,
+		"lng":        lng,
+		"updated_at": time.Now().Unix(),
+	}).Err()
+}
+
+func (c *DriverCache) MarkOnline(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+) error {
+	key := "driver:" + driverID.String()
+
+	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+		"status":     "ONLINE",
+		"lat":        lat,
+		"lng":        lng,
+		"updated_at": time.Now().Unix(),
+	}).Err()
+}
+
+func (c *DriverCache) MarkOffline(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	key := "driver:" + driverID.String()
+
+	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+		"status":     "OFFLINE",
+		"updated_at": time.Now().Unix(),
+	}).Err()
+}
