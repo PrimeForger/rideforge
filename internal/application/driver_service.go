@@ -16,26 +16,26 @@ import (
 )
 
 type DriverService struct {
-	driverRepo ports.DriverRepository
-	locker     ports.DriverLocker
-	txManager  *postgres.TxManager
-	outboxRepo ports.OutboxRepository
-	geo        *redis.GeoService
+	driverRepo  ports.DriverRepository
+	txManager   *postgres.TxManager
+	outboxRepo  ports.OutboxRepository
+	geo         *redis.GeoService
+	driverCache *redis.DriverCache
 }
 
 func NewDriverService(
 	driverRepo ports.DriverRepository,
-	locker ports.DriverLocker,
 	txManager *postgres.TxManager,
 	outboxRepo ports.OutboxRepository,
 	geo *redis.GeoService,
+	driverCache *redis.DriverCache,
 ) *DriverService {
 	return &DriverService{
-		driverRepo: driverRepo,
-		locker:     locker,
-		txManager:  txManager,
-		outboxRepo: outboxRepo,
-		geo:        geo,
+		driverRepo:  driverRepo,
+		txManager:   txManager,
+		outboxRepo:  outboxRepo,
+		geo:         geo,
+		driverCache: driverCache,
 	}
 }
 
@@ -101,28 +101,32 @@ func (s *DriverService) UpdateLocation(
 	lat, lng float64,
 ) error {
 	// No need for DB transaction here (hot path)
-	return s.geo.UpdateDriverLocation(ctx, driverID, lat, lng)
+	if err := s.geo.UpdateDriverLocation(ctx, driverID, lat, lng); err != nil {
+		return err
+	}
+
+	return s.driverCache.UpdateDriverLocation(ctx, driverID, lat, lng)
 }
 
-func (s *DriverService) AssignRide(
-	ctx context.Context,
-	driverID uuid.UUID,
-) error {
+// func (s *DriverService) AssignRide(
+// 	ctx context.Context,
+// 	driverID uuid.UUID,
+// ) error {
 
-	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+// 	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
 
-		driver, err := s.driverRepo.GetByID(ctx, driverID)
-		if err != nil {
-			return err
-		}
+// 		driver, err := s.driverRepo.GetByID(ctx, driverID)
+// 		if err != nil {
+// 			return err
+// 		}
 
-		if err := driver.AssignRide(); err != nil {
-			return err
-		}
+// 		if err := driver.AssignRide(); err != nil {
+// 			return err
+// 		}
 
-		return s.driverRepo.Save(ctx, driver)
-	})
-}
+// 		return s.driverRepo.Save(ctx, driver)
+// 	})
+// }
 
 func (s *DriverService) CompleteRide(
 	ctx context.Context,

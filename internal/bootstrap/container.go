@@ -18,6 +18,7 @@ type Container struct {
 	DriverResponseService        *application.DriverResponseService
 	DriverResponseCommandService *application.DriverResponseCommandService
 	GeoService                   *redis.GeoService
+	DriverCache                  *redis.DriverCache
 
 	OutboxRepo         ports.OutboxRepository
 	ProcessedEventRepo *postgres.ProcessedEventRepository
@@ -76,7 +77,7 @@ func NewContainer() (*Container, error) {
 	// ---Application Services ---
 	rideService := application.NewRideService(rideRepo, txManager, outboxRepo)
 	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, rankingEngine, cfg)
-	driverService := application.NewDriverService(driverRepo, driverLocker, txManager, outboxRepo, geoService)
+	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, geoService, driverCache)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo)
 	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
 	// idempotencyService := application.NewIdempotencyService(db)
@@ -92,6 +93,7 @@ func NewContainer() (*Container, error) {
 		DriverResponseService:        driverResponseService,
 		DriverResponseCommandService: driverResponseCommandService,
 		GeoService:                   geoService,
+		DriverCache:                  driverCache,
 		OutboxRepo:                   outboxRepo,
 		ProcessedEventRepo:           processedEventRepo,
 		DriverLocker:                 driverLocker,
