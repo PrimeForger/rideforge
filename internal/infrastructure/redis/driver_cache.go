@@ -7,23 +7,87 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/driver"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 )
 
-type DriverCache struct {
-	client *Client
+const driverConnectionTTL = 60 * time.Second
+const driverDisconnectTTL = 10 * time.Second
+
+type DriverCacheOptions struct {
+	LocationSeqTTLSeconds int
+	HeartbeatTTL          time.Duration
+	ConnectionTTL         time.Duration
+	DisconnectTTL         time.Duration
+	OfferDeliveryTTL      time.Duration
 }
 
-func NewDriverCache(client *Client) *DriverCache {
-	return &DriverCache{client: client}
+type DriverCache struct {
+	client  *Client
+	options DriverCacheOptions
 }
+
+func NewDriverCache(client *Client, options DriverCacheOptions) *DriverCache {
+	return &DriverCache{
+		client:  client,
+		options: options,
+	}
+}
+
+// Connection
+
+func (c *DriverCache) MarkConnected(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	key := "driver:connection:" + driverID.String()
+
+	return c.client.GetRaw().Set(ctx, key, "online", c.options.ConnectionTTL).Err()
+}
+
+func (c *DriverCache) RefreshConnection(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	key := "driver:connection:" + driverID.String()
+
+	return c.client.GetRaw().Expire(ctx, key, c.options.ConnectionTTL).Err()
+}
+
+func (c *DriverCache) MarkDisconnected(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	key := "driver:connection:" + driverID.String()
+
+	return c.client.GetRaw().Set(ctx, key, "disconnecting", c.options.DisconnectTTL).Err()
+}
+
+func (c *DriverCache) IsConnected(
+	ctx context.Context,
+	driverID uuid.UUID,
+) (bool, error) {
+	key := "driver:connection:" + driverID.String()
+
+	val, err := c.client.GetRaw().Get(ctx, key).Result()
+	if err != nil {
+		if err == goredis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return val == "online", nil
+}
+
+// Connection
 
 func (c *DriverCache) GetDrivers(ctx context.Context, driverIDs []uuid.UUID) ([]*driver.Driver, error) {
 
 	pipe := c.client.rdb.Pipeline()
 
-	cmds := make([]*redis.MapStringStringCmd, len(driverIDs))
+	cmds := make([]*goredis.MapStringStringCmd, len(driverIDs))
 
 	for i, id := range driverIDs {
 		key := "driver:" + id.String()
@@ -164,11 +228,67 @@ func (c *DriverCache) UpdateDriverLocation(
 ) error {
 	key := "driver:" + driverID.String()
 
+	now := time.Now().Unix()
+
 	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
 		"lat":        lat,
 		"lng":        lng,
-		"updated_at": time.Now().Unix(),
+		"updated_at": now,
 	}).Err()
+}
+
+func (c *DriverCache) UpdateDriverLocationDetails(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+	accuracy float64,
+	speed float64,
+	bearing float64,
+	seq int64,
+) error {
+	key := "driver:" + driverID.String()
+
+	now := time.Now().Unix()
+
+	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+		"lat":        lat,
+		"lng":        lng,
+		"accuracy":   accuracy,
+		"speed":      speed,
+		"bearing":    bearing,
+		"seq":        seq,
+		"updated_at": now,
+	}).Err()
+}
+
+func (c *DriverCache) MarkOfferAcked(
+	ctx context.Context,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+) error {
+	key := "ride_offer_ack:" + rideID.String() + ":" + driverID.String()
+
+	return c.client.GetRaw().Set(
+		ctx,
+		key,
+		time.Now().Unix(),
+		30*time.Minute,
+	).Err()
+}
+
+func (c *DriverCache) IsOfferAcked(
+	ctx context.Context,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+) (bool, error) {
+	key := "ride_offer_ack:" + rideID.String() + ":" + driverID.String()
+
+	exists, err := c.client.GetRaw().Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+
+	return exists == 1, nil
 }
 
 func (c *DriverCache) MarkOnline(
@@ -196,4 +316,116 @@ func (c *DriverCache) MarkOffline(
 		"status":     "OFFLINE",
 		"updated_at": time.Now().Unix(),
 	}).Err()
+}
+
+func (c *DriverCache) RefreshHeartbeat(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	key := "driver:heartbeat:" + driverID.String()
+
+	return c.client.GetRaw().Set(ctx, key, "1", c.options.HeartbeatTTL).Err()
+}
+
+var acceptLocationSeqScript = goredis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+
+if current and tonumber(ARGV[1]) <= tonumber(current) then
+	return 0
+end
+
+redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+return 1
+`)
+
+func (c *DriverCache) AcceptLocationSeq(
+	ctx context.Context,
+	driverID uuid.UUID,
+	seq int64,
+) (bool, error) {
+	if seq <= 0 {
+		return false, nil
+	}
+
+	key := "driver:last_location_seq:" + driverID.String()
+
+	res, err := acceptLocationSeqScript.Run(
+		ctx,
+		c.client.GetRaw(),
+		[]string{key},
+		seq,
+		c.options.LocationSeqTTLSeconds,
+	).Int()
+
+	if err != nil {
+		return false, err
+	}
+
+	return res == 1, nil
+}
+
+func offerDeliveryKey(rideID uuid.UUID, driverID uuid.UUID) string {
+	return "ride_offer_delivery:" + rideID.String() + ":" + driverID.String()
+}
+
+func (c *DriverCache) MarkOfferDeliveryStatus(
+	ctx context.Context,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+	status ride.OfferDeliveryStatus,
+) error {
+	key := offerDeliveryKey(rideID, driverID)
+
+	pipe := c.client.GetRaw().TxPipeline()
+
+	pipe.HSet(ctx, key, map[string]interface{}{
+		"status":     string(status),
+		"updated_at": time.Now().Unix(),
+	})
+
+	pipe.Expire(ctx, key, c.options.OfferDeliveryTTL)
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *DriverCache) GetOfferDeliveryStatus(
+	ctx context.Context,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+) (ride.OfferDeliveryStatus, error) {
+	key := offerDeliveryKey(rideID, driverID)
+
+	status, err := c.client.GetRaw().HGet(ctx, key, "status").Result()
+	if err != nil {
+		if err == goredis.Nil {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return ride.OfferDeliveryStatus(status), nil
+}
+
+func driverPushTokensKey(driverID uuid.UUID) string {
+	return "driver:push_tokens:" + driverID.String()
+}
+
+func (c *DriverCache) AddPushToken(
+	ctx context.Context,
+	driverID uuid.UUID,
+	token string,
+) error {
+	key := driverPushTokensKey(driverID)
+
+	return c.client.GetRaw().SAdd(ctx, key, token).Err()
+}
+
+func (c *DriverCache) GetPushTokens(
+	ctx context.Context,
+	driverID uuid.UUID,
+) ([]string, error) {
+	key := driverPushTokensKey(driverID)
+
+	return c.client.GetRaw().SMembers(ctx, key).Result()
 }

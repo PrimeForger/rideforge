@@ -57,3 +57,18 @@ CREATE TABLE IF NOT EXISTS processed_events (
     processed_at TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (event_id, consumer_name)
 );
+
+CREATE TABLE IF NOT EXISTS driver_push_tokens (
+    driver_id UUID NOT NULL,
+    device_id VARCHAR(150) NOT NULL,
+    platform VARCHAR(20) NOT NULL, -- android, ios
+    token TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (driver_id, device_id)
+);
+
+CREATE INDEX idx_driver_push_tokens_driver ON driver_push_tokens(driver_id);
+CREATE INDEX idx_driver_push_tokens_enabled ON driver_push_tokens(driver_id, enabled);

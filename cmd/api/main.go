@@ -31,6 +31,10 @@ func main() {
 		container.RideService,
 		container.DriverService,
 		container.DriverResponseCommandService,
+		container.DriverDeviceService,
+		container.RealtimeHub,
+		container.GeoService,
+		container.DriverCache,
 	)
 
 	srv.RegisterRoutes()
@@ -289,10 +293,48 @@ func main() {
 						return err
 					}
 
-					rideID, _ := uuid.Parse(data.RideID)
-					driverID, _ := uuid.Parse(data.DriverID)
+					rideID, err := uuid.Parse(data.RideID)
+					if err != nil {
+						return err
+					}
 
-					return container.DriverResponseService.HandleDriverTimeout(ctx, tx, rideID, driverID)
+					driverID, err := uuid.Parse(data.DriverID)
+					if err != nil {
+						return err
+					}
+
+					acked, err := container.DriverCache.IsOfferAcked(ctx, rideID, driverID)
+					if err != nil {
+						return err
+					}
+
+					deliveryStatus, err := container.DriverCache.GetOfferDeliveryStatus(ctx, rideID, driverID)
+					if err != nil {
+						return err
+					}
+
+					return container.DriverResponseService.HandleDriverTimeout(ctx, tx, rideID, driverID, acked, string(deliveryStatus))
+
+				case "driver.push_token.updated":
+
+					var data struct {
+						DriverID string `json:"driver_id"`
+						DeviceID string `json:"device_id"`
+						Platform string `json:"platform"`
+						Token    string `json:"token"`
+					}
+
+					raw, _ := json.Marshal(envelope.Data)
+					if err := json.Unmarshal(raw, &data); err != nil {
+						return err
+					}
+
+					driverID, err := uuid.Parse(data.DriverID)
+					if err != nil {
+						return err
+					}
+
+					return container.DriverCache.AddPushToken(ctx, driverID, data.Token)
 
 				default:
 					return nil

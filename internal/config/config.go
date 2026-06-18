@@ -16,13 +16,24 @@ type RankingConfig struct {
 	FairnessWeight     float64
 }
 
+type RealtimeConfig struct {
+	MaxLocationAccuracyMeters float64
+	MinLocationIntervalMs     int
+	LocationSeqTTLSeconds     int
+	HeartbeatTTLSeconds       int
+	ConnectionTTLSeconds      int
+	DisconnectTTLSeconds      int
+	OfferDeliveryTTLSeconds   int
+}
+
 type Config struct {
 	OfferBatchSize     int
 	MaxDriverAttempts  int
 	SearchRadiusKm     float64
 	DriverOfferTimeout time.Duration
 
-	Ranking RankingConfig
+	Ranking  RankingConfig
+	Realtime RealtimeConfig
 }
 
 func Load() *Config {
@@ -39,6 +50,15 @@ func Load() *Config {
 			RatingWeight:       getFloat("RATING_WEIGHT", 0.15),
 			ExperienceWeight:   getFloat("EXPERIENCE_WEIGHT", 0.10),
 			FairnessWeight:     getFloat("FAIRNESS_WEIGHT", 0.05),
+		},
+		Realtime: RealtimeConfig{
+			MaxLocationAccuracyMeters: getFloat("MAX_LOCATION_ACCURACY_METERS", 100),
+			MinLocationIntervalMs:     getInt("MIN_LOCATION_INTERVAL_MS", 1000),
+			LocationSeqTTLSeconds:     getInt("LOCATION_SEQ_TTL_SECONDS", 86400),
+			HeartbeatTTLSeconds:       getInt("DRIVER_HEARTBEAT_TTL_SECONDS", 30),
+			ConnectionTTLSeconds:      getInt("DRIVER_CONNECTION_TTL_SECONDS", 60),
+			DisconnectTTLSeconds:      getInt("DRIVER_DISCONNECT_TTL_SECONDS", 10),
+			OfferDeliveryTTLSeconds:   getInt("OFFER_DELIVERY_TTL_SECONDS", 1800),
 		},
 	}
 	cfg.normalizeWeights()
