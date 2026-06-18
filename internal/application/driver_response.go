@@ -182,6 +182,8 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	tx *sql.Tx,
 	rideID uuid.UUID,
 	driverID uuid.UUID,
+	offerAcked bool,
+	deliveryStatus string,
 ) error {
 
 	// 1. Check ride state (important!)
@@ -208,22 +210,54 @@ func (s *DriverResponseService) HandleDriverTimeout(
 		return nil
 	}
 
+	reason := "DELIVERY_UNCONFIRMED"
+	if offerAcked {
+		reason = "ACKED_BUT_NO_RESPONSE"
+	} else if deliveryStatus == string(ride.OfferDeliveryWebSocketSent) ||
+		deliveryStatus == string(ride.OfferDeliveryPushSent) {
+		reason = "DELIVERED_BUT_NOT_ACKED"
+	}
+
+	processedEvent := events.DriverTimeoutProcessedEvent{
+		RideID:         rideID,
+		DriverID:       driverID,
+		OfferAcked:     offerAcked,
+		DeliveryStatus: deliveryStatus,
+		TimeoutReason:  reason,
+	}
+
+	if err := s.insertOutboxEvent(ctx, tx, rideID, processedEvent); err != nil {
+		return err
+	}
+
 	// 4. Emit retry event
-	event := events.MatchingRetryEvent{
+	retryEvent := events.MatchingRetryEvent{
 		RideID: rideID,
 	}
 
+	return s.insertOutboxEvent(ctx, tx, rideID, retryEvent)
+}
+
+func (s *DriverResponseService) insertOutboxEvent(
+	ctx context.Context,
+	tx *sql.Tx,
+	aggregateID uuid.UUID,
+	event events.Event,
+) error {
 	envelope := appevents.Envelope{
 		ID:        uuid.NewString(),
 		Type:      event.Name(),
-		Aggregate: rideID.String(),
+		Aggregate: aggregateID.String(),
 		Data:      event,
 		Occurred:  time.Now(),
 	}
 
-	payload, _ := json.Marshal(envelope)
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
 
 	return s.outboxRepo.Insert(ctx, tx,
-		outbox.NewEvent(rideID, envelope.Type, payload),
+		outbox.NewEvent(aggregateID, envelope.Type, payload),
 	)
 }

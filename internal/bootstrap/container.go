@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"time"
+
 	"github.com/ashadashraf/ride-hail-app/internal/application"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
@@ -17,6 +19,7 @@ type Container struct {
 	DriverService                *application.DriverService
 	DriverResponseService        *application.DriverResponseService
 	DriverResponseCommandService *application.DriverResponseCommandService
+	DriverDeviceService          *application.DriverDeviceService
 	GeoService                   *redis.GeoService
 	DriverCache                  *redis.DriverCache
 
@@ -28,9 +31,12 @@ type Container struct {
 	TimeoutScheduler   *redis.TimeoutScheduler
 	RideEventHandler   *matching.RideEventHandler
 	DriverOfferHandler *matching.DriverOfferHandler
-	RideProducer       *kafka.Producer
-	MatchProducer      *kafka.Producer
-	DLQProducer        *kafka.Producer
+
+	RideProducer  *kafka.Producer
+	MatchProducer *kafka.Producer
+	DLQProducer   *kafka.Producer
+
+	RealtimeHub *realtime.Hub
 }
 
 func NewContainer() (*Container, error) {
@@ -47,6 +53,7 @@ func NewContainer() (*Container, error) {
 	driverRepo := postgres.NewDriverRepository(db)
 	outboxRepo := postgres.NewOutboxRepository(db)
 	processedEventRepo := postgres.NewProcessedEventRepository(db)
+	driverPushTokenRepo := postgres.NewDriverPushTokenRepository(db)
 
 	// Infra
 	txManager := postgres.NewTxManager(db)
@@ -61,7 +68,13 @@ func NewContainer() (*Container, error) {
 	timeoutScheduler := redis.NewTimeoutScheduler(redisClient.GetRaw(), txManager, outboxRepo)
 	// eventBus := redisbus.NewEventBus("localhost:6379", "ride-events")
 	geoService := redis.NewGeoService(redisClient)
-	driverCache := redis.NewDriverCache(redisClient)
+	driverCache := redis.NewDriverCache(redisClient, redis.DriverCacheOptions{
+		LocationSeqTTLSeconds: cfg.Realtime.LocationSeqTTLSeconds,
+		HeartbeatTTL:          time.Duration(cfg.Realtime.HeartbeatTTLSeconds) * time.Second,
+		ConnectionTTL:         time.Duration(cfg.Realtime.ConnectionTTLSeconds) * time.Second,
+		DisconnectTTL:         time.Duration(cfg.Realtime.DisconnectTTLSeconds) * time.Second,
+		OfferDeliveryTTL:      time.Duration(cfg.Realtime.OfferDeliveryTTLSeconds) * time.Second,
+	})
 
 	// -- Kafka Produers ---
 	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")
@@ -69,7 +82,14 @@ func NewContainer() (*Container, error) {
 	dlqProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events.dlq")
 
 	// -- Real-Time Services ---
-	driverOfferGateway := realtime.NewDriverOfferGateway()
+	realtimeHub := realtime.NewHub()
+	pushNotifier := realtime.NewNoopPushNotifier(driverCache)
+
+	driverOfferGateway := realtime.NewDriverOfferGateway(
+		realtimeHub,
+		driverCache,
+		pushNotifier,
+	)
 
 	// --- Application Utilities (Ranking Engine) ---
 	rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
@@ -80,6 +100,7 @@ func NewContainer() (*Container, error) {
 	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, geoService, driverCache)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo)
 	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
+	driverDeviceService := application.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
 	// idempotencyService := application.NewIdempotencyService(db)
 
 	//Handlers
@@ -92,6 +113,7 @@ func NewContainer() (*Container, error) {
 		DriverService:                driverService,
 		DriverResponseService:        driverResponseService,
 		DriverResponseCommandService: driverResponseCommandService,
+		DriverDeviceService:          driverDeviceService,
 		GeoService:                   geoService,
 		DriverCache:                  driverCache,
 		OutboxRepo:                   outboxRepo,
@@ -104,5 +126,6 @@ func NewContainer() (*Container, error) {
 		RideProducer:                 rideProducer,
 		MatchProducer:                matchProducer,
 		DLQProducer:                  dlqProducer,
+		RealtimeHub:                  realtimeHub,
 	}, nil
 }

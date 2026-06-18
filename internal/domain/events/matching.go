@@ -62,3 +62,25 @@ type DriverTimeoutEvent struct {
 func (e DriverTimeoutEvent) Name() string {
 	return "driver.timeout"
 }
+
+type DriverTimeoutProcessedEvent struct {
+	RideID         uuid.UUID `json:"ride_id"`
+	DriverID       uuid.UUID `json:"driver_id"`
+	OfferAcked     bool      `json:"offer_acked"`
+	DeliveryStatus string    `json:"delivery_status"`
+	TimeoutReason  string    `json:"timeout_reason"`
+}
+
+func (e DriverTimeoutProcessedEvent) Name() string {
+	return "driver.timeout.processed"
+}
+
+type DriverOfferAckedEvent struct {
+	RideID   uuid.UUID `json:"ride_id"`
+	DriverID uuid.UUID `json:"driver_id"`
+	AckedAt  int64     `json:"acked_at"`
+}
+
+func (e DriverOfferAckedEvent) Name() string {
+	return "driver.offer.acked"
+}

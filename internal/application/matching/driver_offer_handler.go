@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ashadashraf/ride-hail-app/internal/config"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
@@ -35,17 +36,15 @@ func (h *DriverOfferHandler) HandleDriverOffered(
 	rideID uuid.UUID,
 	driverID uuid.UUID,
 ) error {
+	if err := h.driverCache.MarkOfferDeliveryStatus(ctx, rideID, driverID, ride.OfferDeliveryOffered); err != nil {
+		return err
+	}
 
 	if err := h.driverCache.MarkDriverOffered(ctx, rideID, driverID); err != nil {
 		return err
 	}
 
-	if err := h.timeoutScheduler.Schedule(
-		ctx,
-		rideID,
-		driverID,
-		h.cfg.DriverOfferTimeout,
-	); err != nil {
+	if err := h.timeoutScheduler.Schedule(ctx, rideID, driverID, h.cfg.DriverOfferTimeout); err != nil {
 		return err
 	}
 

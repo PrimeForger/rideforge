@@ -3,6 +3,9 @@ package realtime
 type IncomingMessage struct {
 	Type string `json:"type"`
 
+	RideID   string `json:"ride_id,omitempty"`
+	DriverID string `json:"driver_id,omitempty"`
+
 	Lat      float64 `json:"lat,omitempty"`
 	Lng      float64 `json:"lng,omitempty"`
 	Accuracy float64 `json:"accuracy,omitempty"`

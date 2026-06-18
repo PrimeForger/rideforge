@@ -1,0 +1,11 @@
+IMPLEMENT THIS IN DRIVER APP
+
+Add WebSocket message handling
+
+Driver app sends after receiving offer:
+
+{
+  "type": "ride.offer.ack",
+  "ride_id": "...",
+  "driver_id": "..."
+}

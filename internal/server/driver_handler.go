@@ -10,15 +10,18 @@ import (
 type DriverHandler struct {
 	driverService   *application.DriverService
 	responseService *application.DriverResponseCommandService
+	deviceService   *application.DriverDeviceService
 }
 
 func NewDriverHandler(
 	driverService *application.DriverService,
 	responseService *application.DriverResponseCommandService,
+	deviceService *application.DriverDeviceService,
 ) *DriverHandler {
 	return &DriverHandler{
 		driverService:   driverService,
 		responseService: responseService,
+		deviceService:   deviceService,
 	}
 }
 
@@ -195,4 +198,43 @@ func (h *DriverHandler) parseRideResponseRequest(
 	}
 
 	return rideID, driverID, true
+}
+
+func (h *DriverHandler) RegisterPushToken(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	var req struct {
+		DriverID string `json:"driver_id"`
+		DeviceID string `json:"device_id"`
+		Platform string `json:"platform"`
+		Token    string `json:"token"`
+	}
+
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	driverID, ok := parseUUID(w, req.DriverID, "driver_id")
+	if !ok {
+		return
+	}
+
+	if err := h.deviceService.RegisterPushToken(
+		r.Context(),
+		driverID,
+		req.DeviceID,
+		req.Platform,
+		req.Token,
+	); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":    "push_token_registered",
+		"driver_id": driverID.String(),
+	})
 }
