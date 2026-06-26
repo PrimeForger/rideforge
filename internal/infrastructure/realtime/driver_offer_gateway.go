@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
@@ -49,6 +50,8 @@ func (g *DriverOfferGateway) SendOffer(
 		})
 
 		if ok {
+			observability.DriverOffersTotal.WithLabelValues("delivered_ws").Inc()
+
 			_ = g.driverCache.MarkOfferDeliveryStatus(
 				ctx,
 				rideID,
@@ -60,6 +63,8 @@ func (g *DriverOfferGateway) SendOffer(
 			return nil
 		}
 
+		observability.DriverOffersTotal.WithLabelValues("ws_failed").Inc()
+
 		_ = g.driverCache.MarkOfferDeliveryStatus(
 			ctx,
 			rideID,
@@ -70,6 +75,8 @@ func (g *DriverOfferGateway) SendOffer(
 	}
 
 	if err := g.push.SendRideOffer(ctx, rideID, driverID); err != nil {
+		observability.DriverOffersTotal.WithLabelValues("push_failed").Inc()
+
 		_ = g.driverCache.MarkOfferDeliveryStatus(
 			ctx,
 			rideID,
@@ -80,6 +87,8 @@ func (g *DriverOfferGateway) SendOffer(
 		log.Printf("push fallback failed: ride_id=%s driver_id=%s err=%v", rideID, driverID, err)
 		return nil
 	}
+
+	observability.DriverOffersTotal.WithLabelValues("delivered_push").Inc()
 
 	_ = g.driverCache.MarkOfferDeliveryStatus(
 		ctx,
