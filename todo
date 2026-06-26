@@ -9,3 +9,36 @@ Driver app sends after receiving offer:
   "ride_id": "...",
   "driver_id": "..."
 }
+
+
+Later before public launch:
+
+- migrate UUID generation to UUID v7
+- add public_id columns
+- update external APIs to use public_id
+
+
+"""
+package ids
+
+import "github.com/google/uuid"
+
+func NewUUID() uuid.UUID {
+	return uuid.New()
+}
+
+func NewString() string {
+	return uuid.NewString()
+}
+
+Then slowly replace:
+
+uuid.New()
+uuid.NewString()
+
+with:
+
+ids.NewUUID()
+ids.NewString()
+
+"""

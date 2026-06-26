@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"time"
 
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
@@ -14,6 +13,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 type DriverResponseService struct {
@@ -21,6 +21,7 @@ type DriverResponseService struct {
 	driverRepo ports.DriverRepository
 	locker     ports.DriverLocker
 	outboxRepo ports.OutboxRepository
+	logger     *zap.Logger
 }
 
 func NewDriverResponseService(
@@ -28,12 +29,14 @@ func NewDriverResponseService(
 	driverRepo ports.DriverRepository,
 	locker ports.DriverLocker,
 	outboxRepo ports.OutboxRepository,
+	logger *zap.Logger,
 ) *DriverResponseService {
 	return &DriverResponseService{
 		rideRepo:   rideRepo,
 		driverRepo: driverRepo,
 		locker:     locker,
 		outboxRepo: outboxRepo,
+		logger:     logger,
 	}
 }
 
@@ -44,17 +47,36 @@ func (s *DriverResponseService) HandleDriverAccepted(
 	driverID uuid.UUID,
 ) error {
 
+	s.logger.Info("driver accepted ride",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+	)
+
 	r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
 	if err != nil {
+		s.logger.Error("failed to fetch ride for driver acceptance",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
 		return err
 	}
 
 	// Already accepted by another driver.
 	if r.Status == ride.StatusAccepted {
+		s.logger.Warn("driver acceptance ignored because ride already accepted",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
 		return nil
 	}
 
 	if r.Status != ride.StatusMatching {
+		s.logger.Warn("driver acceptance rejected because ride is not matching",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.String("ride_status", string(r.Status)),
+		)
 		return errors.New("ride is not in matching state")
 	}
 
@@ -65,6 +87,11 @@ func (s *DriverResponseService) HandleDriverAccepted(
 		rideID,
 		driverID,
 	); err != nil {
+		s.logger.Error("failed to mark driver offer accepted",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
 		return err
 	}
 
@@ -94,8 +121,16 @@ func (s *DriverResponseService) HandleDriverAccepted(
 
 	// Release other reserved drivers.
 	for _, otherDriverID := range otherDrivers {
-		if _, err := s.locker.ReleaseTx(ctx, tx, otherDriverID, rideID); err != nil {
+		ok, err := s.locker.ReleaseTx(ctx, tx, otherDriverID, rideID)
+		if err != nil {
 			return err
+		}
+
+		if !ok {
+			s.logger.Warn("loser driver release skipped",
+				zap.String("ride_id", rideID.String()),
+				zap.String("driver_id", otherDriverID.String()),
+			)
 		}
 	}
 
@@ -104,22 +139,17 @@ func (s *DriverResponseService) HandleDriverAccepted(
 		DriverID: driverID,
 	}
 
-	envelope := appevents.Envelope{
-		ID:        uuid.NewString(),
-		Type:      event.Name(),
-		Aggregate: rideID.String(),
-		Data:      event,
-		Occurred:  time.Now(),
-	}
-
-	payload, err := json.Marshal(envelope)
-	if err != nil {
+	if err := s.insertOutboxEvent(ctx, tx, rideID, event); err != nil {
 		return err
 	}
 
-	return s.outboxRepo.Insert(ctx, tx,
-		outbox.NewEvent(rideID, envelope.Type, payload),
+	s.logger.Info("ride accepted successfully",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+		zap.Int("expired_other_offers", len(otherDrivers)),
 	)
+
+	return nil
 }
 
 func (s *DriverResponseService) HandleDriverRejected(
@@ -129,6 +159,11 @@ func (s *DriverResponseService) HandleDriverRejected(
 	driverID uuid.UUID,
 ) error {
 
+	s.logger.Info("driver rejected ride",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+	)
+
 	// Check ride state
 	r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
 	if err != nil {
@@ -137,6 +172,10 @@ func (s *DriverResponseService) HandleDriverRejected(
 
 	// If already accepted by another driver → ignore
 	if r.Status == ride.StatusAccepted {
+		s.logger.Warn("driver rejection ignored because ride already accepted",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
 		return nil
 	}
 
@@ -149,7 +188,10 @@ func (s *DriverResponseService) HandleDriverRejected(
 	if ok, err := s.locker.ReleaseTx(ctx, tx, driverID, rideID); err != nil {
 		return err
 	} else if !ok {
-		log.Println("release skipped: driver not reserved for this ride")
+		s.logger.Warn("release skipped: driver not reserved for ride",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
 		return nil
 	}
 
@@ -159,22 +201,7 @@ func (s *DriverResponseService) HandleDriverRejected(
 		DriverID: driverID,
 	}
 
-	envelope := appevents.Envelope{
-		ID:        uuid.NewString(),
-		Type:      event.Name(),
-		Aggregate: rideID.String(),
-		Data:      event,
-		Occurred:  time.Now(),
-	}
-
-	payload, err := json.Marshal(envelope)
-	if err != nil {
-		return err
-	}
-
-	return s.outboxRepo.Insert(ctx, tx,
-		outbox.NewEvent(rideID, envelope.Type, payload),
-	)
+	return s.insertOutboxEvent(ctx, tx, rideID, event)
 }
 
 func (s *DriverResponseService) HandleDriverTimeout(
@@ -186,6 +213,13 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	deliveryStatus string,
 ) error {
 
+	s.logger.Warn("driver offer timed out",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+		zap.Bool("offer_acked", offerAcked),
+		zap.String("delivery_status", deliveryStatus),
+	)
+
 	// 1. Check ride state (important!)
 	r, err := s.rideRepo.GetByIDTx(ctx, tx, rideID)
 	if err != nil {
@@ -194,6 +228,10 @@ func (s *DriverResponseService) HandleDriverTimeout(
 
 	// If already accepted → ignore timeout
 	if r.Status == ride.StatusAccepted {
+		s.logger.Warn("driver timeout ignored because ride already accepted",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
 		return nil
 	}
 
@@ -206,7 +244,10 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	if ok, err := s.locker.ReleaseTx(ctx, tx, driverID, rideID); err != nil {
 		return err
 	} else if !ok {
-		log.Println("release skipped: driver not reserved for this ride")
+		s.logger.Warn("release skipped: driver not reserved for ride",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
 		return nil
 	}
 
@@ -235,7 +276,17 @@ func (s *DriverResponseService) HandleDriverTimeout(
 		RideID: rideID,
 	}
 
-	return s.insertOutboxEvent(ctx, tx, rideID, retryEvent)
+	if err := s.insertOutboxEvent(ctx, tx, rideID, retryEvent); err != nil {
+		return err
+	}
+
+	s.logger.Info("matching retry emitted after driver timeout",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+		zap.String("timeout_reason", reason),
+	)
+
+	return nil
 }
 
 func (s *DriverResponseService) insertOutboxEvent(

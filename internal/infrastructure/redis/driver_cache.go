@@ -12,9 +12,6 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-const driverConnectionTTL = 60 * time.Second
-const driverDisconnectTTL = 10 * time.Second
-
 type DriverCacheOptions struct {
 	LocationSeqTTLSeconds int
 	HeartbeatTTL          time.Duration
@@ -428,4 +425,23 @@ func (c *DriverCache) GetPushTokens(
 	key := driverPushTokensKey(driverID)
 
 	return c.client.GetRaw().SMembers(ctx, key).Result()
+}
+
+func (c *DriverCache) UpdateDriverMetrics(
+	ctx context.Context,
+	driverID uuid.UUID,
+	acceptanceRate float64,
+	cancellationRate float64,
+	timeoutRate float64,
+	completedRides int64,
+) error {
+	key := "driver:" + driverID.String()
+
+	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+		"acceptance_rate":    acceptanceRate,
+		"cancellation_rate":  cancellationRate,
+		"timeout_rate":       timeoutRate,
+		"completed_rides":    completedRides,
+		"metrics_updated_at": time.Now().Unix(),
+	}).Err()
 }

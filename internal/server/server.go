@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
+	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/realtime"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 )
@@ -22,6 +23,7 @@ func NewServer(
 	realtimeHub *realtime.Hub,
 	geoService *redis.GeoService,
 	driverCache *redis.DriverCache,
+	realtimeCfg *config.RealtimeConfig,
 ) *Server {
 
 	return &Server{
@@ -35,23 +37,24 @@ func NewServer(
 			realtimeHub,
 			geoService,
 			driverCache,
+			realtimeCfg,
 		),
 	}
 }
 
-func (s *Server) RegisterRoutes() {
+func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Websocket
-	http.HandleFunc("ws/driver", s.webSocketHandler.DriverSocket)
+	mux.HandleFunc("ws/driver", s.webSocketHandler.DriverSocket)
 
-	http.HandleFunc("/rides", s.rideHandler.CreateRide)
+	mux.HandleFunc("/rides", s.rideHandler.CreateRide)
 
-	http.HandleFunc("/driver/online", s.driverHandler.GoOnline)
-	http.HandleFunc("/driver/offline", s.driverHandler.GoOffline)
-	http.HandleFunc("/driver/location", s.driverHandler.UpdateLocation)
+	mux.HandleFunc("/driver/online", s.driverHandler.GoOnline)
+	mux.HandleFunc("/driver/offline", s.driverHandler.GoOffline)
+	mux.HandleFunc("/driver/location", s.driverHandler.UpdateLocation)
 
-	http.HandleFunc("/driver/rides/accept", s.driverHandler.AcceptRide)
-	http.HandleFunc("/driver/rides/reject", s.driverHandler.RejectRide)
+	mux.HandleFunc("/driver/rides/accept", s.driverHandler.AcceptRide)
+	mux.HandleFunc("/driver/rides/reject", s.driverHandler.RejectRide)
 
-	http.HandleFunc("/driver/push-token", s.driverHandler.RegisterPushToken)
+	mux.HandleFunc("/driver/push-token", s.driverHandler.RegisterPushToken)
 }

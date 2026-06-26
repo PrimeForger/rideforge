@@ -72,3 +72,33 @@ CREATE TABLE IF NOT EXISTS driver_push_tokens (
 
 CREATE INDEX idx_driver_push_tokens_driver ON driver_push_tokens(driver_id);
 CREATE INDEX idx_driver_push_tokens_enabled ON driver_push_tokens(driver_id, enabled);
+
+CREATE TABLE IF NOT EXISTS driver_metrics (
+    driver_id UUID PRIMARY KEY,
+
+    offered_count BIGINT NOT NULL DEFAULT 0,
+    acked_count BIGINT NOT NULL DEFAULT 0,
+    accepted_count BIGINT NOT NULL DEFAULT 0,
+    rejected_count BIGINT NOT NULL DEFAULT 0,
+    timeout_count BIGINT NOT NULL DEFAULT 0,
+    completed_rides BIGINT NOT NULL DEFAULT 0,
+    cancelled_count BIGINT NOT NULL DEFAULT 0,
+
+    acceptance_rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    rejection_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    timeout_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    cancellation_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+
+    last_offered_at TIMESTAMP NULL,
+    last_accepted_at TIMESTAMP NULL,
+    last_completed_at TIMESTAMP NULL,
+
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS driver_metric_events (
+    event_id UUID PRIMARY KEY,
+    driver_id UUID NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    processed_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

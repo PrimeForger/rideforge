@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -41,7 +42,10 @@ func (c *Consumer) Consume(ctx context.Context, handler func(context.Context, []
 			return err
 		}
 
+		eventType := extractEventType(msg.Value)
+
 		if err := handler(ctx, msg.Value); err != nil {
+			observability.KafkaEventsProcessedTotal.WithLabelValues(eventType, "error").Inc()
 
 			log.Println("handler failed, sending to DLQ:", err)
 
@@ -69,10 +73,28 @@ func (c *Consumer) Consume(ctx context.Context, handler func(context.Context, []
 			continue
 		}
 
+		observability.KafkaEventsProcessedTotal.WithLabelValues(eventType, "success").Inc()
+
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
 			return err
 		}
 	}
+}
+
+func extractEventType(payload []byte) string {
+	var e struct {
+		Type string `json:"type"`
+	}
+
+	if err := json.Unmarshal(payload, &e); err != nil {
+		return "unknown"
+	}
+
+	if e.Type == "" {
+		return "unknown"
+	}
+
+	return e.Type
 }
 
 func (c *Consumer) Close() error {
