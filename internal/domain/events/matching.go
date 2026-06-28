@@ -19,8 +19,11 @@ func (e MatchingRetryEvent) Name() string {
 }
 
 type DriverOfferedEvent struct {
-	RideID   uuid.UUID
-	DriverID uuid.UUID
+	RideID          uuid.UUID `json:"ride_id"`
+	DriverID        uuid.UUID `json:"driver_id"`
+	OfferTimeoutMs  int64     `json:"offer_timeout_ms"`
+	MatchingAttempt int       `json:"matching_attempt"`
+	SearchRadiusKm  float64   `json:"search_radius_km"`
 }
 
 func (e DriverOfferedEvent) Name() string {

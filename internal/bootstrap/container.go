@@ -41,8 +41,9 @@ type Container struct {
 	MatchProducer *kafka.Producer
 	DLQProducer   *kafka.Producer
 
-	RealtimeHub *realtime.Hub
-	Config      *config.Config
+	RealtimeHub             *realtime.Hub
+	HeartbeatRecoveryWorker *realtime.HeartbeatRecoveryWorker
+	Config                  *config.Config
 
 	Logger *zap.Logger
 }
@@ -108,10 +109,11 @@ func NewContainer() (*Container, error) {
 
 	// --- Application Utilities (Ranking Engine) ---
 	rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
+	retryPolicy := matching.NewRetryPolicy(cfg.MatchingRetry)
 
 	// --- Application Services ---
 	rideService := application.NewRideService(rideRepo, txManager, outboxRepo)
-	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, rankingEngine, cfg, log)
+	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, rankingEngine, cfg, retryPolicy, log)
 	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, geoService, driverCache)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)
 	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
@@ -122,6 +124,10 @@ func NewContainer() (*Container, error) {
 	// -- Handlers --
 	rideEventHandler := matching.NewRideEventHandler(timeoutScheduler)
 	driverOfferHandler := matching.NewDriverOfferHandler(driverCache, timeoutScheduler, driverOfferGateway, cfg, log)
+
+	heartbeatRecoveryWorker := realtime.NewHeartbeatRecoveryWorker(
+		driverCache, driverService, time.Duration(cfg.Realtime.HeartbeatRecoveryIntervalSeconds)*time.Second, log,
+	)
 
 	eventRouter := application.NewEventRouter(
 		txManager,
@@ -160,6 +166,7 @@ func NewContainer() (*Container, error) {
 		MatchProducer:                matchProducer,
 		DLQProducer:                  dlqProducer,
 		RealtimeHub:                  realtimeHub,
+		HeartbeatRecoveryWorker:      heartbeatRecoveryWorker,
 		Config:                       cfg,
 		Logger:                       log,
 	}, nil

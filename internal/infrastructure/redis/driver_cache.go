@@ -295,12 +295,19 @@ func (c *DriverCache) MarkOnline(
 ) error {
 	key := "driver:" + driverID.String()
 
-	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+	pipe := c.client.GetRaw().TxPipeline()
+
+	pipe.HSet(ctx, key, map[string]interface{}{
 		"status":     "ONLINE",
 		"lat":        lat,
 		"lng":        lng,
 		"updated_at": time.Now().Unix(),
-	}).Err()
+	})
+
+	pipe.SAdd(ctx, "drivers:online", driverID.String())
+
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (c *DriverCache) MarkOffline(
@@ -309,10 +316,17 @@ func (c *DriverCache) MarkOffline(
 ) error {
 	key := "driver:" + driverID.String()
 
-	return c.client.GetRaw().HSet(ctx, key, map[string]interface{}{
+	pipe := c.client.GetRaw().TxPipeline()
+
+	pipe.HSet(ctx, key, map[string]interface{}{
 		"status":     "OFFLINE",
 		"updated_at": time.Now().Unix(),
-	}).Err()
+	})
+
+	pipe.SRem(ctx, "drivers:online", driverID.String())
+
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (c *DriverCache) RefreshHeartbeat(
@@ -322,6 +336,41 @@ func (c *DriverCache) RefreshHeartbeat(
 	key := "driver:heartbeat:" + driverID.String()
 
 	return c.client.GetRaw().Set(ctx, key, "1", c.options.HeartbeatTTL).Err()
+}
+
+func (c *DriverCache) GetOnlineDriverIDs(
+	ctx context.Context,
+) ([]uuid.UUID, error) {
+	members, err := c.client.GetRaw().SMembers(ctx, "drivers:online").Result()
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, len(members))
+
+	for _, raw := range members {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, nil
+}
+
+func (c *DriverCache) HasHeartbeat(
+	ctx context.Context,
+	driverID uuid.UUID,
+) (bool, error) {
+	key := "driver:heartbeat:" + driverID.String()
+
+	exists, err := c.client.GetRaw().Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+
+	return exists == 1, nil
 }
 
 var acceptLocationSeqScript = goredis.NewScript(`

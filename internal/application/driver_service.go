@@ -72,6 +72,7 @@ func (s *DriverService) GoOnline(
 func (s *DriverService) GoOffline(
 	ctx context.Context,
 	driverID uuid.UUID,
+	reason string,
 ) error {
 
 	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
@@ -89,6 +90,7 @@ func (s *DriverService) GoOffline(
 
 		event := events.DriverOfflineEvent{
 			DriverID: driverID,
+			Reason:   reason,
 		}
 
 		return s.emitEvent(ctx, tx, driverID, event)

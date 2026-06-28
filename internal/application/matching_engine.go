@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"math"
 	"time"
 
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
@@ -18,6 +17,9 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.uber.org/zap"
 )
 
@@ -29,6 +31,7 @@ type MatchingEngine struct {
 	driverCache *redis.DriverCache
 	ranking     matching.Ranker
 	cfg         *config.Config
+	retryPolicy *matching.RetryPolicy
 	logger      *zap.Logger
 }
 
@@ -40,6 +43,7 @@ func NewMatchingEngine(
 	driverCache *redis.DriverCache,
 	ranking matching.Ranker,
 	cfg *config.Config,
+	retryPolicy *matching.RetryPolicy,
 	logger *zap.Logger,
 ) *MatchingEngine {
 	return &MatchingEngine{
@@ -50,6 +54,7 @@ func NewMatchingEngine(
 		driverCache: driverCache,
 		ranking:     ranking,
 		cfg:         cfg,
+		retryPolicy: retryPolicy,
 		logger:      logger,
 	}
 }
@@ -59,37 +64,66 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	tx *sql.Tx,
 	rideID uuid.UUID,
 ) error {
+	tracer := otel.Tracer("application.matching")
+
+	ctx, span := tracer.Start(ctx, "MatchingEngine.HandleMatchingStarted")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("ride.id", rideID.String()),
+	)
+
 	start := time.Now()
 	result := "success"
+
+	fail := func(metricResult string, err error) error {
+		result = metricResult
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("matching.result", metricResult))
+		span.SetStatus(codes.Error, metricResult)
+		return err
+	}
 
 	defer func() {
 		observability.MatchingDurationSeconds.Observe(time.Since(start).Seconds())
 		observability.MatchingAttemptsTotal.WithLabelValues(result).Inc()
+		span.SetAttributes(attribute.String("matching.final_result", result))
 	}()
 
 	// Count attempts
 	attemptCount, err := e.driverRepo.CountRideAttemptsTx(ctx, tx, rideID)
 	if err != nil {
-		result = "count_attempts_error"
 		e.logger.Error("failed to count matching attempts",
 			zap.String("ride_id", rideID.String()),
 			zap.Error(err),
 		)
-		return err
+		return fail("count_attempts_error", err)
 	}
 
 	if attemptCount >= e.cfg.MaxDriverAttempts {
-		result = "max_attempts_reached"
+		err := errors.New("max driver attempts reached")
+
 		e.logger.Warn("max matching attempts reached",
 			zap.String("ride_id", rideID.String()),
 			zap.Int("attempt_count", attemptCount),
 			zap.Int("max_attempts", e.cfg.MaxDriverAttempts),
 		)
-		return errors.New("max driver attempts reached")
+
+		return fail("max_attempts_reached", err)
 	}
 
 	// Dynamic radius expansion
-	radius := e.computeRadius(attemptCount)
+	initialDecision := e.retryPolicy.Decide(matching.RetryInput{
+		AttemptCount: attemptCount,
+	})
+
+	radius := initialDecision.RadiusKm
+	candidateLimit := initialDecision.CandidateLimit
+
+	span.SetAttributes(
+		attribute.Int("matching.attempt_count", attemptCount),
+		attribute.Float64("matching.radius_km", radius),
+	)
 
 	e.logger.Info("matching started",
 		zap.String("ride_id", rideID.String()),
@@ -108,24 +142,35 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	pickupLng := 78.4867
 
 	// Get nearby driver IDs
-	nearby, err := e.geo.FindNearbyDriversWithDistance(ctx, pickupLat, pickupLng, radius, 50)
+	nearby, err := e.geo.FindNearbyDriversWithDistance(
+		ctx,
+		pickupLat,
+		pickupLng,
+		radius,
+		candidateLimit,
+	)
 	if err != nil {
-		result = "geo_search_error"
 		e.logger.Error("geo driver search failed",
 			zap.String("ride_id", rideID.String()),
 			zap.Float64("radius_km", radius),
 			zap.Error(err),
 		)
-		return err
+		return fail("geo_search_error", err)
 	}
 
+	span.SetAttributes(
+		attribute.Int("matching.nearby_driver_count", len(nearby)),
+	)
+
 	if len(nearby) == 0 {
-		result = "no_nearby_drivers"
+		err := errors.New("no nearby drivers")
+
 		e.logger.Warn("no nearby drivers found",
 			zap.String("ride_id", rideID.String()),
 			zap.Float64("radius_km", radius),
 		)
-		return errors.New("no nearby drivers")
+
+		return fail("no_nearby_drivers", err)
 	}
 
 	ids := make([]uuid.UUID, 0, len(nearby))
@@ -140,33 +185,85 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	// drivers, err := e.driverRepo.GetEligibleDriversTx(ctx, tx, rideID, nearbyIDs)
 	drivers, err := e.driverCache.GetDrivers(ctx, ids)
 	if err != nil {
-		result = "driver_cache_error"
 		e.logger.Error("failed to fetch drivers from cache",
 			zap.String("ride_id", rideID.String()),
 			zap.Int("nearby_count", len(nearby)),
 			zap.Error(err),
 		)
-		return err
+		return fail("driver_cache_error", err)
 	}
 
+	span.SetAttributes(
+		attribute.Int("matching.cached_driver_count", len(drivers)),
+	)
+
 	if len(drivers) == 0 {
-		result = "no_eligible_drivers"
+		err := errors.New("no eligible drivers")
+
 		e.logger.Warn("no drivers found in cache",
 			zap.String("ride_id", rideID.String()),
 			zap.Int("nearby_count", len(nearby)),
 		)
-		return errors.New("no eligible drivers")
+
+		return fail("no_eligible_drivers", err)
 	}
 
 	offeredSet, err := e.driverCache.GetOfferedDrivers(ctx, rideID)
 	if err != nil {
-		result = "offered_set_error"
 		e.logger.Error("failed to fetch offered driver set",
 			zap.String("ride_id", rideID.String()),
 			zap.Error(err),
 		)
-		return err
+		return fail("offered_set_error", err)
 	}
+
+	span.SetAttributes(
+		attribute.Int("matching.already_offered_count", len(offeredSet)),
+	)
+
+	eligibleCount := 0
+
+	for _, d := range drivers {
+
+		if !d.IsAvailable() {
+			continue
+		}
+
+		if _, exists := offeredSet[d.ID]; exists {
+			continue
+		}
+
+		if _, ok := distanceMap[d.ID]; !ok {
+			continue
+		}
+
+		eligibleCount++
+	}
+
+	decision := e.retryPolicy.Decide(matching.RetryInput{
+		AttemptCount:        attemptCount,
+		NearbyDriverCount:   len(nearby),
+		EligibleDriverCount: eligibleCount,
+	})
+
+	e.logger.Info("adaptive retry decision selected",
+		zap.String("ride_id", rideID.String()),
+		zap.Int("attempt_count", attemptCount),
+		zap.Float64("radius_km", decision.RadiusKm),
+		zap.Int("offer_batch_size", decision.OfferBatchSize),
+		zap.Int("candidate_limit", decision.CandidateLimit),
+		zap.Duration("offer_timeout", decision.OfferTimeout),
+		zap.Int("nearby_drivers", len(nearby)),
+		zap.Int("eligible_drivers", eligibleCount),
+	)
+
+	span.SetAttributes(
+		attribute.Float64("matching.radius_km", decision.RadiusKm),
+		attribute.Int("matching.offer_batch_size", decision.OfferBatchSize),
+		attribute.Int("matching.candidate_limit", decision.CandidateLimit),
+		attribute.Int64("matching.offer_timeout_ms", decision.OfferTimeout.Milliseconds()),
+		attribute.Int("matching.eligible_driver_count", eligibleCount),
+	)
 
 	// Build heap
 	h := &matching.MaxHeap{}
@@ -199,37 +296,42 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		})
 	}
 
+	span.SetAttributes(
+		attribute.Int("matching.candidate_count", h.Len()),
+	)
+
 	if h.Len() == 0 {
-		result = "no_eligible_after_filtering"
+		err := errors.New("no eligible drivers after filtering")
+
 		e.logger.Warn("no eligible drivers after filtering",
 			zap.String("ride_id", rideID.String()),
 			zap.Int("cache_driver_count", len(drivers)),
 			zap.Int("already_offered_count", len(offeredSet)),
 		)
-		return errors.New("no eligible drivers after filtering")
+
+		return fail("no_eligible_after_filtering", err)
 	}
 
 	// Offer top N drivers (parallel batch)
 	selected := 0
 
-	for h.Len() > 0 && selected < e.cfg.OfferBatchSize {
+	for h.Len() > 0 && selected < decision.OfferBatchSize {
 
 		candidate := heap.Pop(h).(matching.Candidate)
 
 		ok, err := e.locker.ReserveTx(ctx, tx, candidate.DriverID, rideID)
 		if err != nil {
-			result = "driver_reserve_error"
 			e.logger.Error("failed to reserve driver",
 				zap.String("ride_id", rideID.String()),
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
-			return err
+			return fail("driver_reserve_error", err)
 		}
 
 		if !ok {
 			observability.DriverOffersTotal.WithLabelValues("reserve_skipped").Inc()
-			e.logger.Warn("driver reservation skipped",
+			e.logger.Debug("driver reservation skipped",
 				zap.String("ride_id", rideID.String()),
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Float64("score", candidate.Score),
@@ -245,20 +347,21 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		)
 
 		// Record attempt in DB
-		err = e.driverRepo.InsertRideOfferTx(ctx, tx, rideID, candidate.DriverID, attemptCount+1)
-		if err != nil {
-			result = "insert_offer_error"
+		if err := e.driverRepo.InsertRideOfferTx(ctx, tx, rideID, candidate.DriverID, attemptCount+1); err != nil {
 			e.logger.Error("failed to insert ride driver offer",
 				zap.String("ride_id", rideID.String()),
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
-			return err
+			return fail("insert_offer_error", err)
 		}
 
 		event := events.DriverOfferedEvent{
-			RideID:   rideID,
-			DriverID: candidate.DriverID,
+			RideID:          rideID,
+			DriverID:        candidate.DriverID,
+			OfferTimeoutMs:  decision.OfferTimeout.Milliseconds(),
+			MatchingAttempt: attemptCount + 1,
+			SearchRadiusKm:  decision.RadiusKm,
 		}
 
 		envelope := appevents.Envelope{
@@ -271,38 +374,41 @@ func (e *MatchingEngine) HandleMatchingStarted(
 
 		payload, err := json.Marshal(envelope)
 		if err != nil {
-			result = "marshal_offer_event_error"
 			e.logger.Error("failed to marshal driver offered event",
 				zap.String("ride_id", rideID.String()),
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
-			return err
+			return fail("marshal_offer_event_error", err)
 		}
 
 		if err := e.outboxRepo.Insert(ctx, tx,
 			outbox.NewEvent(rideID, envelope.Type, payload),
 		); err != nil {
-			result = "outbox_insert_error"
 			e.logger.Error("failed to insert driver offered outbox event",
 				zap.String("ride_id", rideID.String()),
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
-			return err
+			return fail("outbox_insert_error", err)
 		}
 
 		observability.DriverOffersTotal.WithLabelValues("offered").Inc()
 		selected++
 	}
 
+	span.SetAttributes(
+		attribute.Int("matching.selected_driver_count", selected),
+	)
+
 	if selected == 0 {
-		result = "no_drivers_reserved"
+		err := errors.New("no drivers reserved")
+
 		e.logger.Warn("matching completed with no drivers reserved",
 			zap.String("ride_id", rideID.String()),
-			zap.Int("candidate_count", h.Len()),
 		)
-		return errors.New("no drivers reserved")
+
+		return fail("no_drivers_reserved", err)
 	}
 
 	e.logger.Info("matching completed",
@@ -311,9 +417,7 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	)
 
 	result = "success"
-	return nil
-}
+	span.SetAttributes(attribute.String("matching.result", "success"))
 
-func (e *MatchingEngine) computeRadius(attempt int) float64 {
-	return e.cfg.SearchRadiusKm * math.Pow(2, float64(attempt))
+	return nil
 }

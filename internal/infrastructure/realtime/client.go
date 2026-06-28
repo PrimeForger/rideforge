@@ -11,6 +11,9 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const (
@@ -179,32 +182,61 @@ func (c *Client) writePump(ctx context.Context) {
 }
 
 func (c *Client) handleLocation(ctx context.Context, msg IncomingMessage) error {
+	tracer := otel.Tracer("realtime.websocket")
+
+	ctx, span := tracer.Start(ctx, "driver.location.updated")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("driver.id", c.driverID.String()),
+		attribute.Float64("location.lat", msg.Lat),
+		attribute.Float64("location.lng", msg.Lng),
+		attribute.Float64("location.accuracy", msg.Accuracy),
+		attribute.Float64("location.speed", msg.Speed),
+		attribute.Float64("location.bearing", msg.Bearing),
+		attribute.Int64("location.seq", msg.Seq),
+	)
+
 	if msg.Lat < -90 || msg.Lat > 90 || msg.Lng < -180 || msg.Lng > 180 {
+		span.SetAttributes(attribute.String("location.drop_reason", "invalid_coordinates"))
+		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
 	if msg.Accuracy <= 0 || msg.Accuracy > c.maxAccuracyMeters {
+		span.SetAttributes(attribute.String("location.drop_reason", "bad_accuracy"))
+		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
 	if msg.Seq <= 0 {
+		span.SetAttributes(attribute.String("location.drop_reason", "invalid_sequence"))
+		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
 	if !c.lastLocationAt.IsZero() && time.Since(c.lastLocationAt) < c.minLocationGap {
+		span.SetAttributes(attribute.String("location.drop_reason", "rate_limited"))
+		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
 	accepted, err := c.driverCache.AcceptLocationSeq(ctx, c.driverID, msg.Seq)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "sequence_check_failed")
 		return err
 	}
 
 	if !accepted {
+		span.SetAttributes(attribute.String("location.drop_reason", "stale_sequence"))
+		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
 	if err := c.geo.UpdateDriverLocation(ctx, c.driverID, msg.Lat, msg.Lng); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "geo_update_failed")
 		return err
 	}
 
@@ -218,18 +250,30 @@ func (c *Client) handleLocation(ctx context.Context, msg IncomingMessage) error 
 		msg.Bearing,
 		msg.Seq,
 	); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "driver_cache_update_failed")
 		return err
 	}
 
 	if err := c.driverCache.RefreshHeartbeat(ctx, c.driverID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "heartbeat_refresh_failed")
 		return err
 	}
 
 	if err := c.driverCache.RefreshConnection(ctx, c.driverID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "connection_refresh_failed")
 		return err
 	}
 
 	c.lastLocationAt = time.Now()
+
+	span.SetAttributes(
+		attribute.Bool("location.accepted", true),
+	)
+
+	span.SetStatus(codes.Ok, "location_updated")
 
 	return nil
 }
