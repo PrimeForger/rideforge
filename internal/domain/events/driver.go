@@ -16,6 +16,7 @@ func (e DriverOnlineEvent) Name() string {
 // Driver Offline
 type DriverOfflineEvent struct {
 	DriverID uuid.UUID `json:"driver_id"`
+	Reason   string    `json:"reason"`
 }
 
 func (e DriverOfflineEvent) Name() string {

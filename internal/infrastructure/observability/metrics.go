@@ -62,6 +62,30 @@ var (
 		},
 		[]string{"event_type", "result"},
 	)
+
+	HeartbeatRecoveryScansTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "heartbeat_recovery_scans_total",
+			Help: "Total heartbeat recovery scans",
+		},
+		[]string{"result"},
+	)
+
+	HeartbeatRecoveriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "heartbeat_recoveries_total",
+			Help: "Total stale driver heartbeat recoveries",
+		},
+		[]string{"result"},
+	)
+
+	HeartbeatRecoveryDurationSeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "heartbeat_recovery_duration_seconds",
+			Help:    "Heartbeat recovery scan duration",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
 )
 
 var registerOnce sync.Once
@@ -76,6 +100,9 @@ func Register() {
 			MatchingDurationSeconds,
 			RedisOperationsTotal,
 			KafkaEventsProcessedTotal,
+			HeartbeatRecoveryScansTotal,
+			HeartbeatRecoveriesTotal,
+			HeartbeatRecoveryDurationSeconds,
 		)
 	})
 }

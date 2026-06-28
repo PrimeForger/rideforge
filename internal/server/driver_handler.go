@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/driver"
 	"github.com/google/uuid"
 )
 
@@ -81,7 +82,7 @@ func (h *DriverHandler) GoOffline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.driverService.GoOffline(r.Context(), driverID); err != nil {
+	if err := h.driverService.GoOffline(r.Context(), driverID, driver.DriverOfflineReasonManual); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

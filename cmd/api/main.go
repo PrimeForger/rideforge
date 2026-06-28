@@ -18,6 +18,9 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/server"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +34,27 @@ func main() {
 	defer func() {
 		_ = container.Logger.Sync()
 	}()
+
+	var shutdownTracing func(context.Context) error
+
+	if container.Config.Observability.TracingEnabled {
+		shutdown, err := observability.InitTracing(
+			context.Background(),
+			container.Config.Observability.ServiceName,
+			container.Config.Observability.Environment,
+			container.Config.Observability.OTLPEndpoint,
+		)
+		if err != nil {
+			container.Logger.Fatal("failed to initialize tracing", zap.Error(err))
+		}
+
+		shutdownTracing = shutdown
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = shutdownTracing(ctx)
+		}()
+	}
 
 	observability.Register()
 
@@ -50,9 +74,11 @@ func main() {
 
 	srv.RegisterRoutes(mux)
 
+	handler := otelhttp.NewHandler(mux, "http.server")
+
 	httpServer := &http.Server{
 		Addr:         ":8080",
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -71,7 +97,7 @@ func main() {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -90,13 +116,29 @@ func main() {
 	go func() {
 		defer wg.Done()
 
+		tracer := otel.Tracer("kafka.consumer")
+
 		err := consumer.Consume(ctx, func(ctx context.Context, msg []byte) error {
 			var envelope appevents.Envelope
 			if err := json.Unmarshal(msg, &envelope); err != nil {
 				return err
 			}
 
-			return container.EventRouter.Handle(ctx, envelope)
+			ctx, span := tracer.Start(ctx, "event.process")
+			defer span.End()
+
+			span.SetAttributes(
+				attribute.String("event.type", envelope.Type),
+				attribute.String("event.id", envelope.ID),
+				attribute.String("event.aggregate", envelope.Aggregate),
+			)
+
+			if err := container.EventRouter.Handle(ctx, envelope); err != nil {
+				span.RecordError(err)
+				return err
+			}
+
+			return nil
 		})
 
 		if err != nil && ctx.Err() == nil {
@@ -104,6 +146,11 @@ func main() {
 				zap.Error(err),
 			)
 		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		container.HeartbeatRecoveryWorker.Start(ctx)
 	}()
 
 	go func() {
