@@ -39,6 +39,10 @@ type MatchingRetryConfig struct {
 	MaxOfferTimeoutMs  int
 }
 
+type LockingConfig struct {
+	DriverLockTTLSeconds int
+}
+
 type ObservabilityConfig struct {
 	ServiceName    string
 	Environment    string
@@ -55,6 +59,7 @@ type Config struct {
 	Ranking       RankingConfig
 	Realtime      RealtimeConfig
 	MatchingRetry MatchingRetryConfig
+	Locking       LockingConfig
 	Observability ObservabilityConfig
 }
 
@@ -93,6 +98,9 @@ func Load() *Config {
 			BaseOfferTimeoutMs: getInt("DRIVER_OFFER_TIMEOUT_MS", 10000),
 			MinOfferTimeoutMs:  getInt("DRIVER_OFFER_MIN_TIMEOUT_MS", 7000),
 			MaxOfferTimeoutMs:  getInt("DRIVER_OFFER_MAX_TIMEOUT_MS", 15000),
+		},
+		Locking: LockingConfig{
+			DriverLockTTLSeconds: getInt("DRIVER_LOCK_TTL_SECONDS", 20),
 		},
 		Observability: ObservabilityConfig{
 			ServiceName:    getString("SERVICE_NAME", "rideforge-api"),

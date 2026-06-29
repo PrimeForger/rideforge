@@ -319,7 +319,7 @@ func (e *MatchingEngine) HandleMatchingStarted(
 
 		candidate := heap.Pop(h).(matching.Candidate)
 
-		ok, err := e.locker.ReserveTx(ctx, tx, candidate.DriverID, rideID)
+		ok, err := e.locker.Reserve(ctx, candidate.DriverID, rideID)
 		if err != nil {
 			e.logger.Error("failed to reserve driver",
 				zap.String("ride_id", rideID.String()),
@@ -353,6 +353,8 @@ func (e *MatchingEngine) HandleMatchingStarted(
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
+			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "insert_offer_failed")
+
 			return fail("insert_offer_error", err)
 		}
 
@@ -379,6 +381,8 @@ func (e *MatchingEngine) HandleMatchingStarted(
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
+			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "marshal_offer_event_failed")
+
 			return fail("marshal_offer_event_error", err)
 		}
 
@@ -390,6 +394,8 @@ func (e *MatchingEngine) HandleMatchingStarted(
 				zap.String("driver_id", candidate.DriverID.String()),
 				zap.Error(err),
 			)
+			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "outbox_insert_failed")
+
 			return fail("outbox_insert_error", err)
 		}
 
@@ -420,4 +426,37 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	span.SetAttributes(attribute.String("matching.result", "success"))
 
 	return nil
+}
+
+func (e *MatchingEngine) releaseReservedDriverAfterFailure(
+	ctx context.Context,
+	rideID uuid.UUID,
+	driverID uuid.UUID,
+	reason string,
+) {
+	released, err := e.locker.Release(ctx, driverID, rideID)
+	if err != nil {
+		e.logger.Error("failed to release reserved driver after matching failure",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.String("reason", reason),
+			zap.Error(err),
+		)
+		return
+	}
+
+	if !released {
+		e.logger.Warn("reserved driver release skipped after matching failure",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.String("reason", reason),
+		)
+		return
+	}
+
+	e.logger.Info("reserved driver released after matching failure",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+		zap.String("reason", reason),
+	)
 }
