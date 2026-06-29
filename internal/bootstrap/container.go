@@ -73,7 +73,7 @@ func NewContainer() (*Container, error) {
 
 	// -- Infra --
 	txManager := postgres.NewTxManager(db)
-	driverLocker := postgres.NewDBDriverLocker(db)
+	// driverLocker := postgres.NewDBDriverLocker(db)
 
 	// --- Redis ---
 	redisClient, err := redis.NewClient("localhost:6379")
@@ -91,6 +91,12 @@ func NewContainer() (*Container, error) {
 		DisconnectTTL:         time.Duration(cfg.Realtime.DisconnectTTLSeconds) * time.Second,
 		OfferDeliveryTTL:      time.Duration(cfg.Realtime.OfferDeliveryTTLSeconds) * time.Second,
 	})
+	driverLocker := redis.NewRedisDriverLocker(
+		redisClient,
+		redis.DriverLockerOptions{
+			LockTTL: time.Duration(cfg.Locking.DriverLockTTLSeconds) * time.Second,
+		},
+	)
 
 	// -- Kafka Produers ---
 	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")

@@ -151,9 +151,16 @@ func (s *DriverResponseService) HandleDriverAccepted(
 
 	// Release other reserved drivers.
 	for _, otherDriverID := range otherDrivers {
-		ok, err := s.locker.ReleaseTx(ctx, tx, otherDriverID, rideID)
+		ok, err := s.locker.Release(ctx, otherDriverID, rideID)
 		if err != nil {
-			return fail(err, "release_loser_driver_failed")
+			s.logger.Error("failed to release loser driver lock",
+				zap.String("ride_id", rideID.String()),
+				zap.String("driver_id", otherDriverID.String()),
+				zap.Error(err),
+			)
+
+			span.RecordError(err)
+			continue
 		}
 
 		if !ok {
@@ -244,17 +251,21 @@ func (s *DriverResponseService) HandleDriverRejected(
 	}
 
 	// Release driver lock
-	if ok, err := s.locker.ReleaseTx(ctx, tx, driverID, rideID); err != nil {
-		return fail(err, "release_driver_failed")
+	ok, err := s.locker.Release(ctx, driverID, rideID)
+	if err != nil {
+		s.logger.Error("failed to release rejected driver lock",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+		span.RecordError(err)
 	} else if !ok {
-		span.SetAttributes(attribute.String("driver_response.result", "release_skipped"))
-		span.SetStatus(codes.Ok, "release skipped")
-
 		s.logger.Warn("release skipped: driver not reserved for ride",
 			zap.String("ride_id", rideID.String()),
 			zap.String("driver_id", driverID.String()),
 		)
-		return nil
+	} else {
+		span.SetAttributes(attribute.Bool("driver_response.lock_released", true))
 	}
 
 	// Emit processed event (NOT retry)
@@ -331,17 +342,23 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	}
 
 	// 3. Release lock
-	if ok, err := s.locker.ReleaseTx(ctx, tx, driverID, rideID); err != nil {
-		return fail(err, "release_driver_failed")
+	ok, err := s.locker.Release(ctx, driverID, rideID)
+	if err != nil {
+		s.logger.Error("failed to release timed-out driver lock",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+		span.RecordError(err)
+		span.SetAttributes(attribute.Bool("driver_response.lock_release_error", true))
 	} else if !ok {
-		span.SetAttributes(attribute.String("driver_response.result", "release_skipped"))
-		span.SetStatus(codes.Ok, "release skipped")
-
 		s.logger.Warn("release skipped: driver not reserved for ride",
 			zap.String("ride_id", rideID.String()),
 			zap.String("driver_id", driverID.String()),
 		)
-		return nil
+		span.SetAttributes(attribute.Bool("driver_response.lock_release_skipped", true))
+	} else {
+		span.SetAttributes(attribute.Bool("driver_response.lock_released", true))
 	}
 
 	reason := "DELIVERY_UNCONFIRMED"
