@@ -13,6 +13,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
@@ -29,6 +30,8 @@ type MatchingEngine struct {
 	outboxRepo  ports.OutboxRepository
 	geo         *redis.GeoService
 	driverCache *redis.DriverCache
+	h3          *geo.H3Service
+	h3Index     *redis.H3DriverIndex
 	ranking     matching.Ranker
 	cfg         *config.Config
 	retryPolicy *matching.RetryPolicy
@@ -41,6 +44,8 @@ func NewMatchingEngine(
 	outboxRepo ports.OutboxRepository,
 	geo *redis.GeoService,
 	driverCache *redis.DriverCache,
+	h3 *geo.H3Service,
+	h3Index *redis.H3DriverIndex,
 	ranking matching.Ranker,
 	cfg *config.Config,
 	retryPolicy *matching.RetryPolicy,
@@ -52,6 +57,8 @@ func NewMatchingEngine(
 		outboxRepo:  outboxRepo,
 		geo:         geo,
 		driverCache: driverCache,
+		h3:          h3,
+		h3Index:     h3Index,
 		ranking:     ranking,
 		cfg:         cfg,
 		retryPolicy: retryPolicy,
@@ -118,7 +125,6 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	})
 
 	radius := initialDecision.RadiusKm
-	candidateLimit := initialDecision.CandidateLimit
 
 	span.SetAttributes(
 		attribute.Int("matching.attempt_count", attemptCount),
@@ -142,27 +148,20 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	pickupLng := 78.4867
 
 	// Get nearby driver IDs
-	nearby, err := e.geo.FindNearbyDriversWithDistance(
-		ctx,
-		pickupLat,
-		pickupLng,
-		radius,
-		candidateLimit,
-	)
+	candidateDriverIDs, err := e.findCandidateDriverIDs(ctx, pickupLat, pickupLng, initialDecision)
 	if err != nil {
-		e.logger.Error("geo driver search failed",
+		e.logger.Error("candidate driver search failed",
 			zap.String("ride_id", rideID.String()),
-			zap.Float64("radius_km", radius),
 			zap.Error(err),
 		)
-		return fail("geo_search_error", err)
+		return fail("candidate_search_error", err)
 	}
 
 	span.SetAttributes(
-		attribute.Int("matching.nearby_driver_count", len(nearby)),
+		attribute.Int("matching.nearby_driver_count", len(candidateDriverIDs)),
 	)
 
-	if len(nearby) == 0 {
+	if len(candidateDriverIDs) == 0 {
 		err := errors.New("no nearby drivers")
 
 		e.logger.Warn("no nearby drivers found",
@@ -173,21 +172,13 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		return fail("no_nearby_drivers", err)
 	}
 
-	ids := make([]uuid.UUID, 0, len(nearby))
-	distanceMap := make(map[uuid.UUID]float64)
-
-	for _, d := range nearby {
-		ids = append(ids, d.ID)
-		distanceMap[d.ID] = d.Distance
-	}
-
 	// Batch fetch drivers
 	// drivers, err := e.driverRepo.GetEligibleDriversTx(ctx, tx, rideID, nearbyIDs)
-	drivers, err := e.driverCache.GetDrivers(ctx, ids)
+	drivers, err := e.driverCache.GetDrivers(ctx, candidateDriverIDs)
 	if err != nil {
 		e.logger.Error("failed to fetch drivers from cache",
 			zap.String("ride_id", rideID.String()),
-			zap.Int("nearby_count", len(nearby)),
+			zap.Int("nearby_count", len(candidateDriverIDs)),
 			zap.Error(err),
 		)
 		return fail("driver_cache_error", err)
@@ -202,7 +193,7 @@ func (e *MatchingEngine) HandleMatchingStarted(
 
 		e.logger.Warn("no drivers found in cache",
 			zap.String("ride_id", rideID.String()),
-			zap.Int("nearby_count", len(nearby)),
+			zap.Int("nearby_count", len(candidateDriverIDs)),
 		)
 
 		return fail("no_eligible_drivers", err)
@@ -233,16 +224,12 @@ func (e *MatchingEngine) HandleMatchingStarted(
 			continue
 		}
 
-		if _, ok := distanceMap[d.ID]; !ok {
-			continue
-		}
-
 		eligibleCount++
 	}
 
 	decision := e.retryPolicy.Decide(matching.RetryInput{
 		AttemptCount:        attemptCount,
-		NearbyDriverCount:   len(nearby),
+		NearbyDriverCount:   len(candidateDriverIDs),
 		EligibleDriverCount: eligibleCount,
 	})
 
@@ -253,7 +240,7 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		zap.Int("offer_batch_size", decision.OfferBatchSize),
 		zap.Int("candidate_limit", decision.CandidateLimit),
 		zap.Duration("offer_timeout", decision.OfferTimeout),
-		zap.Int("nearby_drivers", len(nearby)),
+		zap.Int("nearby_drivers", len(candidateDriverIDs)),
 		zap.Int("eligible_drivers", eligibleCount),
 	)
 
@@ -280,12 +267,13 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		}
 
 		// distance := e.geo.Distance(ctx, pickupLat, pickupLng, driver.ID)
-		// distance := haversineDistance(pickupLat, pickupLng, driver.Lat, driver.Lng)
 
-		distance, ok := distanceMap[d.ID]
-		if !ok {
-			continue
-		}
+		distance := matching.HaversineDistanceKm(
+			pickupLat,
+			pickupLng,
+			d.Lat,
+			d.Lng,
+		)
 
 		score := e.ranking.Score(d, distance)
 
@@ -459,4 +447,41 @@ func (e *MatchingEngine) releaseReservedDriverAfterFailure(
 		zap.String("driver_id", driverID.String()),
 		zap.String("reason", reason),
 	)
+}
+
+func (e *MatchingEngine) findCandidateDriverIDs(
+	ctx context.Context,
+	pickupLat float64,
+	pickupLng float64,
+	decision matching.RetryDecision,
+) ([]uuid.UUID, error) {
+
+	if e.cfg.H3.Enabled {
+		cells, err := e.h3.NeighborCells(pickupLat, pickupLng)
+		if err != nil {
+			return nil, err
+		}
+
+		return e.h3Index.GetDriversInCells(ctx, cells, decision.CandidateLimit)
+	}
+
+	nearby, err := e.geo.FindNearbyDriversWithDistance(
+		ctx,
+		pickupLat,
+		pickupLng,
+		decision.RadiusKm,
+		decision.CandidateLimit,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]uuid.UUID, 0, len(nearby))
+
+	for _, d := range nearby {
+		ids = append(ids, d.ID)
+	}
+
+	return ids, nil
 }

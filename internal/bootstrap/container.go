@@ -6,6 +6,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/application"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
 	applogger "github.com/ashadashraf/ride-hail-app/internal/infrastructure/logger"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
@@ -23,6 +24,7 @@ type Container struct {
 	DriverService                *application.DriverService
 	DriverResponseService        *application.DriverResponseService
 	DriverResponseCommandService *application.DriverResponseCommandService
+	DriverLocationService        *application.DriverLocationService
 	DriverDeviceService          *application.DriverDeviceService
 	DriverMetricsService         *application.DriverMetricsService
 	GeoService                   *redis.GeoService
@@ -75,6 +77,9 @@ func NewContainer() (*Container, error) {
 	txManager := postgres.NewTxManager(db)
 	// driverLocker := postgres.NewDBDriverLocker(db)
 
+	// -- Geo --
+	h3Service := geo.NewH3Service(cfg.H3.Resolution, cfg.H3.SearchRing)
+
 	// --- Redis ---
 	redisClient, err := redis.NewClient("localhost:6379")
 	if err != nil {
@@ -95,6 +100,12 @@ func NewContainer() (*Container, error) {
 		redisClient,
 		redis.DriverLockerOptions{
 			LockTTL: time.Duration(cfg.Locking.DriverLockTTLSeconds) * time.Second,
+		},
+	)
+	h3Index := redis.NewH3DriverIndex(
+		redisClient,
+		redis.H3DriverIndexOptions{
+			DriverCellTTL: time.Duration(cfg.H3.DriverCellTTLSeconds) * time.Second,
 		},
 	)
 
@@ -119,8 +130,9 @@ func NewContainer() (*Container, error) {
 
 	// --- Application Services ---
 	rideService := application.NewRideService(rideRepo, txManager, outboxRepo)
-	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, rankingEngine, cfg, retryPolicy, log)
-	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, geoService, driverCache)
+	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, h3Service, h3Index, rankingEngine, cfg, retryPolicy, log)
+	driverLocationService := application.NewDriverLocationService(geoService, driverCache, h3Service, h3Index, cfg)
+	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, driverLocationService)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)
 	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
 	driverDeviceService := application.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
@@ -146,6 +158,7 @@ func NewContainer() (*Container, error) {
 		driverMetricsService,
 		geoService,
 		driverCache,
+		h3Index,
 		driverLocker,
 		log,
 	)
@@ -157,6 +170,7 @@ func NewContainer() (*Container, error) {
 		DriverService:                driverService,
 		DriverResponseService:        driverResponseService,
 		DriverResponseCommandService: driverResponseCommandService,
+		DriverLocationService:        driverLocationService,
 		DriverDeviceService:          driverDeviceService,
 		DriverMetricsService:         driverMetricsService,
 		GeoService:                   geoService,

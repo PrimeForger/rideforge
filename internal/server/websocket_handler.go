@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/realtime"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
@@ -11,23 +12,26 @@ import (
 )
 
 type WebSocketHandler struct {
-	hub         *realtime.Hub
-	geo         *redis.GeoService
-	driverCache *redis.DriverCache
-	cfg         *config.RealtimeConfig
+	hub                   *realtime.Hub
+	geo                   *redis.GeoService
+	driverCache           *redis.DriverCache
+	driverLocationService *application.DriverLocationService
+	cfg                   *config.RealtimeConfig
 }
 
 func NewWebSocketHandler(
 	hub *realtime.Hub,
 	geo *redis.GeoService,
 	driverCache *redis.DriverCache,
+	driverLocationService *application.DriverLocationService,
 	cfg *config.RealtimeConfig,
 ) *WebSocketHandler {
 	return &WebSocketHandler{
-		hub:         hub,
-		geo:         geo,
-		driverCache: driverCache,
-		cfg:         cfg,
+		hub:                   hub,
+		geo:                   geo,
+		driverCache:           driverCache,
+		driverLocationService: driverLocationService,
+		cfg:                   cfg,
 	}
 }
 
@@ -60,6 +64,7 @@ func (h *WebSocketHandler) DriverSocket(w http.ResponseWriter, r *http.Request) 
 		h.hub,
 		h.geo,
 		h.driverCache,
+		h.driverLocationService,
 		h.cfg,
 	)
 
