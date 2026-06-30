@@ -42,3 +42,50 @@ ids.NewUUID()
 ids.NewString()
 
 """
+
+"""
+Make sure Docker/build has:
+
+CGO_ENABLED=1
+"""
+
+"""
+this function has temporary code values
+func (g *GeoService) Distance
+"""
+
+
+"""
+Later, when you integrate a routing engine like OSRM or Valhalla, 
+you can replace the Haversine input with ETA without changing 
+the rest of the matching pipeline.
+"""
+
+"""
+define an interface:
+
+type CandidateFinder interface {
+    FindCandidates(
+        ctx context.Context,
+        pickupLat float64,
+        pickupLng float64,
+        decision matching.RetryDecision,
+    ) ([]uuid.UUID, error)
+}
+
+Then provide two implementations:
+
+RedisGeoCandidateFinder
+H3CandidateFinder
+
+The matching engine simply depends on the interface:
+
+candidateDriverIDs, err := e.candidateFinder.FindCandidates(
+    ctx,
+    pickupLat,
+    pickupLng,
+    decision,
+)
+
+No feature flags, no branching, no knowledge of H3 or GEO inside the matching engine.
+"""

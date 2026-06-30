@@ -65,6 +65,7 @@ func main() {
 		container.RideService,
 		container.DriverService,
 		container.DriverResponseCommandService,
+		container.DriverLocationService,
 		container.DriverDeviceService,
 		container.RealtimeHub,
 		container.GeoService,

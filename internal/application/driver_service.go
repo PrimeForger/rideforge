@@ -10,32 +10,28 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
-	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 )
 
 type DriverService struct {
-	driverRepo  ports.DriverRepository
-	txManager   *postgres.TxManager
-	outboxRepo  ports.OutboxRepository
-	geo         *redis.GeoService
-	driverCache *redis.DriverCache
+	driverRepo            ports.DriverRepository
+	txManager             *postgres.TxManager
+	outboxRepo            ports.OutboxRepository
+	driverLocationService *DriverLocationService
 }
 
 func NewDriverService(
 	driverRepo ports.DriverRepository,
 	txManager *postgres.TxManager,
 	outboxRepo ports.OutboxRepository,
-	geo *redis.GeoService,
-	driverCache *redis.DriverCache,
+	driverLocationService *DriverLocationService,
 ) *DriverService {
 	return &DriverService{
-		driverRepo:  driverRepo,
-		txManager:   txManager,
-		outboxRepo:  outboxRepo,
-		geo:         geo,
-		driverCache: driverCache,
+		driverRepo:            driverRepo,
+		txManager:             txManager,
+		outboxRepo:            outboxRepo,
+		driverLocationService: driverLocationService,
 	}
 }
 
@@ -102,12 +98,13 @@ func (s *DriverService) UpdateLocation(
 	driverID uuid.UUID,
 	lat, lng float64,
 ) error {
-	// No need for DB transaction here (hot path)
-	if err := s.geo.UpdateDriverLocation(ctx, driverID, lat, lng); err != nil {
-		return err
-	}
 
-	return s.driverCache.UpdateDriverLocation(ctx, driverID, lat, lng)
+	return s.driverLocationService.PersistLocation(
+		ctx,
+		driverID,
+		lat,
+		lng,
+	)
 }
 
 // func (s *DriverService) AssignRide(

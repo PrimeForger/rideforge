@@ -31,6 +31,7 @@ type EventRouter struct {
 
 	geoService   *redis.GeoService
 	driverCache  *redis.DriverCache
+	h3Index      *redis.H3DriverIndex
 	driverLocker interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	}
@@ -49,6 +50,7 @@ func NewEventRouter(
 	driverMetricsService *DriverMetricsService,
 	geoService *redis.GeoService,
 	driverCache *redis.DriverCache,
+	h3Index *redis.H3DriverIndex,
 	driverLocker interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	},
@@ -65,6 +67,7 @@ func NewEventRouter(
 		driverMetricsService:  driverMetricsService,
 		geoService:            geoService,
 		driverCache:           driverCache,
+		h3Index:               h3Index,
 		driverLocker:          driverLocker,
 		logger:                logger,
 	}
@@ -392,6 +395,10 @@ func (r *EventRouter) dispatchSideEffect(
 		}
 
 		if err := r.geoService.RemoveDriver(ctx, driverID); err != nil {
+			return err
+		}
+
+		if err := r.h3Index.RemoveDriver(ctx, driverID); err != nil {
 			return err
 		}
 

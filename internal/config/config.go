@@ -50,6 +50,13 @@ type ObservabilityConfig struct {
 	TracingEnabled bool
 }
 
+type H3Config struct {
+	Enabled              bool
+	Resolution           int
+	SearchRing           int
+	DriverCellTTLSeconds int
+}
+
 type Config struct {
 	OfferBatchSize     int
 	MaxDriverAttempts  int
@@ -61,6 +68,7 @@ type Config struct {
 	MatchingRetry MatchingRetryConfig
 	Locking       LockingConfig
 	Observability ObservabilityConfig
+	H3            H3Config
 }
 
 func Load() *Config {
@@ -107,6 +115,12 @@ func Load() *Config {
 			Environment:    getString("ENVIRONMENT", "local"),
 			OTLPEndpoint:   getString("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 			TracingEnabled: getBool("TRACING_ENABLED", true),
+		},
+		H3: H3Config{
+			Enabled:              getBool("H3_ENABLED", true),
+			Resolution:           getInt("H3_RESOLUTION", 8),
+			SearchRing:           getInt("H3_SEARCH_RING", 1),
+			DriverCellTTLSeconds: getInt("H3_DRIVER_CELL_TTL_SECONDS", 90),
 		},
 	}
 	cfg.normalizeWeights()

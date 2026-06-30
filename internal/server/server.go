@@ -19,6 +19,7 @@ func NewServer(
 	rideService *application.RideService,
 	driverService *application.DriverService,
 	driverResponseCommandService *application.DriverResponseCommandService,
+	driverLocationService *application.DriverLocationService,
 	driverDeviceService *application.DriverDeviceService,
 	realtimeHub *realtime.Hub,
 	geoService *redis.GeoService,
@@ -37,6 +38,7 @@ func NewServer(
 			realtimeHub,
 			geoService,
 			driverCache,
+			driverLocationService,
 			realtimeCfg,
 		),
 	}

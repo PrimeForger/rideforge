@@ -3,9 +3,11 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
@@ -32,6 +34,8 @@ type Client struct {
 	geo         *redis.GeoService
 	driverCache *redis.DriverCache
 
+	driverLocationService *application.DriverLocationService
+
 	send chan OutgoingMessage
 	done chan struct{}
 
@@ -48,19 +52,21 @@ func NewClient(
 	hub *Hub,
 	geo *redis.GeoService,
 	driverCache *redis.DriverCache,
+	driverLocationService *application.DriverLocationService,
 	cfg *config.RealtimeConfig,
 ) *Client {
 	return &Client{
-		driverID:          driverID,
-		conn:              conn,
-		hub:               hub,
-		geo:               geo,
-		driverCache:       driverCache,
-		send:              make(chan OutgoingMessage, sendBufferSize),
-		done:              make(chan struct{}),
-		cfg:               cfg,
-		maxAccuracyMeters: cfg.MaxLocationAccuracyMeters,
-		minLocationGap:    time.Duration(cfg.MinLocationIntervalMs) * time.Millisecond,
+		driverID:              driverID,
+		conn:                  conn,
+		hub:                   hub,
+		geo:                   geo,
+		driverCache:           driverCache,
+		driverLocationService: driverLocationService,
+		send:                  make(chan OutgoingMessage, sendBufferSize),
+		done:                  make(chan struct{}),
+		cfg:                   cfg,
+		maxAccuracyMeters:     cfg.MaxLocationAccuracyMeters,
+		minLocationGap:        time.Duration(cfg.MinLocationIntervalMs) * time.Millisecond,
 	}
 }
 
@@ -197,50 +203,19 @@ func (c *Client) handleLocation(ctx context.Context, msg IncomingMessage) error 
 		attribute.Int64("location.seq", msg.Seq),
 	)
 
-	if msg.Lat < -90 || msg.Lat > 90 || msg.Lng < -180 || msg.Lng > 180 {
-		span.SetAttributes(attribute.String("location.drop_reason", "invalid_coordinates"))
+	// Rate limiting
+	if !c.lastLocationAt.IsZero() &&
+		time.Since(c.lastLocationAt) < c.minLocationGap {
+
+		span.SetAttributes(
+			attribute.String("location.drop_reason", "rate_limited"),
+		)
+
 		span.SetStatus(codes.Ok, "dropped")
 		return nil
 	}
 
-	if msg.Accuracy <= 0 || msg.Accuracy > c.maxAccuracyMeters {
-		span.SetAttributes(attribute.String("location.drop_reason", "bad_accuracy"))
-		span.SetStatus(codes.Ok, "dropped")
-		return nil
-	}
-
-	if msg.Seq <= 0 {
-		span.SetAttributes(attribute.String("location.drop_reason", "invalid_sequence"))
-		span.SetStatus(codes.Ok, "dropped")
-		return nil
-	}
-
-	if !c.lastLocationAt.IsZero() && time.Since(c.lastLocationAt) < c.minLocationGap {
-		span.SetAttributes(attribute.String("location.drop_reason", "rate_limited"))
-		span.SetStatus(codes.Ok, "dropped")
-		return nil
-	}
-
-	accepted, err := c.driverCache.AcceptLocationSeq(ctx, c.driverID, msg.Seq)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "sequence_check_failed")
-		return err
-	}
-
-	if !accepted {
-		span.SetAttributes(attribute.String("location.drop_reason", "stale_sequence"))
-		span.SetStatus(codes.Ok, "dropped")
-		return nil
-	}
-
-	if err := c.geo.UpdateDriverLocation(ctx, c.driverID, msg.Lat, msg.Lng); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "geo_update_failed")
-		return err
-	}
-
-	if err := c.driverCache.UpdateDriverLocationDetails(
+	err := c.driverLocationService.ProcessRealtimeLocation(
 		ctx,
 		c.driverID,
 		msg.Lat,
@@ -249,21 +224,42 @@ func (c *Client) handleLocation(ctx context.Context, msg IncomingMessage) error 
 		msg.Speed,
 		msg.Bearing,
 		msg.Seq,
-	); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "driver_cache_update_failed")
-		return err
-	}
+	)
 
-	if err := c.driverCache.RefreshHeartbeat(ctx, c.driverID); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "heartbeat_refresh_failed")
-		return err
-	}
+	switch {
+	case errors.Is(err, application.ErrInvalidCoordinates):
+		span.SetAttributes(
+			attribute.String("location.drop_reason", "invalid_coordinates"),
+		)
+		span.SetStatus(codes.Ok, "dropped")
+		return nil
 
-	if err := c.driverCache.RefreshConnection(ctx, c.driverID); err != nil {
+	case errors.Is(err, application.ErrBadAccuracy):
+		span.SetAttributes(
+			attribute.String("location.drop_reason", "bad_accuracy"),
+		)
+		span.SetStatus(codes.Ok, "dropped")
+		return nil
+
+	case errors.Is(err, application.ErrInvalidSequence):
+		span.SetAttributes(
+			attribute.String("location.drop_reason", "invalid_sequence"),
+		)
+		span.SetStatus(codes.Ok, "dropped")
+		return nil
+
+	case errors.Is(err, application.ErrStaleSequence):
+		span.SetAttributes(
+			attribute.String("location.drop_reason", "stale_sequence"),
+		)
+		span.SetStatus(codes.Ok, "dropped")
+		return nil
+
+	case err != nil:
+		// Unexpected infrastructure/system failure.
+		// The child span already records the specific reason.
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "connection_refresh_failed")
+		span.SetStatus(codes.Error, "processing_failed")
 		return err
 	}
 
