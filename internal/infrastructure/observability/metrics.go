@@ -47,6 +47,69 @@ var (
 		},
 	)
 
+	H3CellUpdatesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "h3_cell_updates_total",
+			Help: "Total H3 driver cell updates",
+		},
+		[]string{"result"},
+	)
+
+	H3DriverRemovalsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "h3_driver_removals_total",
+			Help: "Total H3 driver removals",
+		},
+		[]string{"result"},
+	)
+
+	H3LookupDurationSeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "h3_lookup_duration_seconds",
+			Help:    "H3 driver lookup duration",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	H3LookupResultsTotal = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "h3_lookup_result_count",
+			Help: "Drivers returned by H3 lookup",
+			Buckets: []float64{
+				0,
+				1,
+				5,
+				10,
+				20,
+				50,
+				100,
+				200,
+			},
+		},
+	)
+
+	H3LookupCellsTotal = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name: "h3_lookup_cell_count",
+			Help: "Number of H3 cells searched",
+			Buckets: []float64{
+				1,
+				7,
+				19,
+				37,
+				61,
+				91,
+			},
+		},
+	)
+
+	H3IndexedDrivers = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "h3_indexed_drivers",
+			Help: "Current number of indexed drivers",
+		},
+	)
+
 	RedisOperationsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "redis_operations_total",

@@ -37,6 +37,7 @@ func NewDriverLocationService(
 }
 
 var driverLocationTracer = otel.Tracer("application.driver_location")
+var spatialTracer = otel.Tracer("application.spatial")
 
 func (s *DriverLocationService) ProcessRealtimeLocation(
 	ctx context.Context,
@@ -53,11 +54,11 @@ func (s *DriverLocationService) ProcessRealtimeLocation(
 
 	span.SetAttributes(
 		attribute.String("driver.id", driverID.String()),
-		attribute.Float64("location.lat", lat),
-		attribute.Float64("location.lng", lng),
-		attribute.Float64("location.accuracy", accuracy),
-		attribute.Float64("location.speed", speed),
-		attribute.Float64("location.bearing", bearing),
+		// attribute.Float64("location.lat", lat),
+		// attribute.Float64("location.lng", lng),
+		// attribute.Float64("location.accuracy", accuracy),
+		// attribute.Float64("location.speed", speed),
+		// attribute.Float64("location.bearing", bearing),
 		attribute.Int64("location.seq", seq),
 	)
 
@@ -187,18 +188,69 @@ func (s *DriverLocationService) updateSpatialIndexes(
 	lat, lng float64,
 ) error {
 
-	if err := s.geo.UpdateDriverLocation(ctx, driverID, lat, lng); err != nil {
+	ctx, span := spatialTracer.Start(ctx, "driver.spatial_update")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("driver.id", driverID.String()),
+		attribute.Bool("h3.enabled", s.cfg.H3.Enabled),
+	)
+
+	ctx, geoSpan := spatialTracer.Start(ctx, "redis.geo.update")
+
+	err := s.geo.UpdateDriverLocation(ctx, driverID, lat, lng)
+
+	if err != nil {
+		geoSpan.RecordError(err)
+		geoSpan.SetStatus(codes.Error, "geo_update_failed")
+		geoSpan.End()
 		return err
 	}
+
+	geoSpan.SetStatus(codes.Ok, "geo_updated")
+	geoSpan.End()
 
 	if !s.cfg.H3.Enabled {
 		return nil
 	}
+
+	ctx, h3Span := spatialTracer.Start(ctx, "h3.cell.update")
+	defer h3Span.End()
 
 	cell, err := s.h3.CellForLocation(lat, lng)
 	if err != nil {
 		return err
 	}
 
-	return s.h3Index.UpdateDriverCell(ctx, driverID, cell)
+	updateResult, err := s.h3Index.UpdateDriverCell(ctx, driverID, cell)
+
+	if err != nil {
+		h3Span.RecordError(err)
+		h3Span.SetStatus(codes.Error, "h3_update_failed")
+		return err
+	}
+
+	h3Span.SetAttributes(
+		attribute.String("h3.cell", cell),
+	)
+
+	switch updateResult.Status {
+
+	case redis.DriverCellAdded:
+		h3Span.SetAttributes(
+			attribute.String("h3.update_status", "added"),
+		)
+
+	case redis.DriverCellMoved:
+		h3Span.SetAttributes(
+			attribute.String("h3.update_status", "moved"),
+		)
+
+	case redis.DriverCellUnchanged:
+		h3Span.SetAttributes(
+			attribute.String("h3.update_status", "unchanged"),
+		)
+	}
+
+	return err
 }

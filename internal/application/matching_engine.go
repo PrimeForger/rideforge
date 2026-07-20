@@ -24,6 +24,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var matchingTracer = otel.Tracer("application.matching")
+
 type MatchingEngine struct {
 	driverRepo  ports.DriverRepository
 	locker      ports.DriverLocker
@@ -71,9 +73,8 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	tx *sql.Tx,
 	rideID uuid.UUID,
 ) error {
-	tracer := otel.Tracer("application.matching")
 
-	ctx, span := tracer.Start(ctx, "MatchingEngine.HandleMatchingStarted")
+	ctx, span := matchingTracer.Start(ctx, "MatchingEngine.HandleMatchingStarted")
 	defer span.End()
 
 	span.SetAttributes(
@@ -455,15 +456,39 @@ func (e *MatchingEngine) findCandidateDriverIDs(
 	pickupLng float64,
 	decision matching.RetryDecision,
 ) ([]uuid.UUID, error) {
+	ctx, span := matchingTracer.Start(ctx, "matching.candidate_search")
+	defer span.End()
 
 	if e.cfg.H3.Enabled {
+
+		span.SetAttributes(
+			attribute.String("search.backend", "h3"),
+			attribute.Int("candidate_limit", decision.CandidateLimit),
+		)
+
 		cells, err := e.h3.NeighborCells(pickupLat, pickupLng)
 		if err != nil {
 			return nil, err
 		}
 
-		return e.h3Index.GetDriversInCells(ctx, cells, decision.CandidateLimit)
+		ids, err := e.h3Index.GetDriversInCells(ctx, cells, decision.CandidateLimit)
+
+		if err != nil {
+			return nil, err
+		}
+
+		span.SetAttributes(
+			attribute.Int("candidate_count", len(ids)),
+		)
+
+		return ids, nil
 	}
+
+	span.SetAttributes(
+		attribute.String("search.backend", "geo"),
+		attribute.Float64("radius_km", decision.RadiusKm),
+		attribute.Int("candidate_limit", decision.CandidateLimit),
+	)
 
 	nearby, err := e.geo.FindNearbyDriversWithDistance(
 		ctx,
@@ -482,6 +507,10 @@ func (e *MatchingEngine) findCandidateDriverIDs(
 	for _, d := range nearby {
 		ids = append(ids, d.ID)
 	}
+
+	span.SetAttributes(
+		attribute.Int("candidate_count", len(ids)),
+	)
 
 	return ids, nil
 }
