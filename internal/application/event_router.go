@@ -398,7 +398,7 @@ func (r *EventRouter) dispatchSideEffect(
 			return err
 		}
 
-		if err := r.h3Index.RemoveDriver(ctx, driverID); err != nil {
+		if _, err := r.h3Index.RemoveDriver(ctx, driverID); err != nil {
 			return err
 		}
 
