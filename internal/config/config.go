@@ -27,6 +27,11 @@ type RealtimeConfig struct {
 	HeartbeatRecoveryIntervalSeconds int
 }
 
+type MatchingConfig struct {
+	SparseDriverThreshold int
+	DenseDriverThreshold  int
+}
+
 type MatchingRetryConfig struct {
 	BaseRadiusKm       float64
 	MaxRadiusKm        float64
@@ -65,6 +70,7 @@ type Config struct {
 
 	Ranking       RankingConfig
 	Realtime      RealtimeConfig
+	Matching      MatchingConfig
 	MatchingRetry MatchingRetryConfig
 	Locking       LockingConfig
 	Observability ObservabilityConfig
@@ -96,6 +102,10 @@ func Load() *Config {
 			OfferDeliveryTTLSeconds:          getInt("OFFER_DELIVERY_TTL_SECONDS", 1800),
 			HeartbeatRecoveryIntervalSeconds: getInt("HEARTBEAT_RECOVERY_INTERVAL_SECONDS", 10),
 		},
+		Matching: MatchingConfig{
+			SparseDriverThreshold: getInt("MATCHING_SPARSE_DRIVER_THRESHOLD", 5),
+			DenseDriverThreshold:  getInt("MATCHING_DENSE_DRIVER_THRESHOLD", 25),
+		},
 		MatchingRetry: MatchingRetryConfig{
 			BaseRadiusKm:       getFloat("MATCHING_BASE_RADIUS_KM", 5.0),
 			MaxRadiusKm:        getFloat("MATCHING_MAX_RADIUS_KM", 25.0),
@@ -124,6 +134,7 @@ func Load() *Config {
 		},
 	}
 	cfg.normalizeWeights()
+	cfg.validateMatching()
 	return cfg
 }
 
@@ -148,6 +159,12 @@ func (c *Config) normalizeWeights() {
 	c.Ranking.RatingWeight /= total
 	c.Ranking.ExperienceWeight /= total
 	c.Ranking.FairnessWeight /= total
+}
+
+func (cfg *Config) validateMatching() {
+	if cfg.Matching.SparseDriverThreshold >= cfg.Matching.DenseDriverThreshold {
+		panic("MATCHING_SPARSE_DRIVER_THRESHOLD must be less than MATCHING_DENSE_DRIVER_THRESHOLD")
+	}
 }
 
 func getInt(key string, def int) int {
