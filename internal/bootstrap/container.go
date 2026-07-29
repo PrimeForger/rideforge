@@ -4,6 +4,14 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/density"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/expansion"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/pipeline"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/policy"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/profile"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/selector"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/strategy"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
@@ -108,6 +116,7 @@ func NewContainer() (*Container, error) {
 			DriverCellTTL: time.Duration(cfg.H3.DriverCellTTLSeconds) * time.Second,
 		},
 	)
+	densityProvider := redis.NewH3DensityProvider(redisClient, h3Service)
 
 	// -- Kafka Produers ---
 	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")
@@ -130,7 +139,44 @@ func NewContainer() (*Container, error) {
 
 	// --- Application Services ---
 	rideService := application.NewRideService(rideRepo, txManager, outboxRepo)
-	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, geoService, driverCache, h3Service, h3Index, rankingEngine, cfg, retryPolicy, log)
+
+	// -----------------------------------------------------------------------------
+	// Candidate Discovery
+	// -----------------------------------------------------------------------------
+
+	densityClassifier := density.NewDensityClassifier(cfg.Matching.SparseDriverThreshold, cfg.Matching.DenseDriverThreshold)
+
+	expansionProfileProvider := profile.NewDefaultExpansionProfileProvider(h3Service.MaxSearchRing())
+
+	densityRule := policy.NewDensityRule(densityProvider, densityClassifier, expansionProfileProvider)
+
+	profilePipeline := pipeline.NewDefaultPipeline(
+		densityRule,
+	)
+
+	profileSelector := selector.NewDefaultSelector(profilePipeline)
+
+	// expansionPolicy := candidates.NewDefaultRingExpansionPolicy(h3Service.MaxSearchRing())
+	ringExpansionPolicy := expansion.NewAdaptiveRingExpansionPolicy(
+		profileSelector,
+	)
+
+	ringExpander := expansion.NewRingExpander(h3Service, h3Index, ringExpansionPolicy)
+
+	budgetFactory := search.NewDefaultBudgetFactory(h3Service.MaxSearchRing())
+
+	h3Strategy := strategy.NewH3Strategy(h3Service, ringExpander, budgetFactory)
+	geoStrategy := strategy.NewGeoStrategy(geoService)
+
+	var candidateSearcher strategy.CandidateSearcher
+
+	if cfg.H3.Enabled {
+		candidateSearcher = h3Strategy
+	} else {
+		candidateSearcher = geoStrategy
+	}
+
+	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, candidateSearcher, driverCache, rankingEngine, cfg, retryPolicy, log)
 	driverLocationService := application.NewDriverLocationService(geoService, driverCache, h3Service, h3Index, cfg)
 	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, driverLocationService)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)

@@ -8,12 +8,13 @@ import (
 	"errors"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/strategy"
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
-	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
@@ -27,44 +28,38 @@ import (
 var matchingTracer = otel.Tracer("application.matching")
 
 type MatchingEngine struct {
-	driverRepo  ports.DriverRepository
-	locker      ports.DriverLocker
-	outboxRepo  ports.OutboxRepository
-	geo         *redis.GeoService
-	driverCache *redis.DriverCache
-	h3          *geo.H3Service
-	h3Index     *redis.H3DriverIndex
-	ranking     matching.Ranker
-	cfg         *config.Config
-	retryPolicy *matching.RetryPolicy
-	logger      *zap.Logger
+	driverRepo        ports.DriverRepository
+	locker            ports.DriverLocker
+	outboxRepo        ports.OutboxRepository
+	candidateSearcher strategy.CandidateSearcher
+	driverCache       *redis.DriverCache
+	ranking           matching.Ranker
+	cfg               *config.Config
+	retryPolicy       *matching.RetryPolicy
+	logger            *zap.Logger
 }
 
 func NewMatchingEngine(
 	driverRepo ports.DriverRepository,
 	locker ports.DriverLocker,
 	outboxRepo ports.OutboxRepository,
-	geo *redis.GeoService,
+	candidateSearcher strategy.CandidateSearcher,
 	driverCache *redis.DriverCache,
-	h3 *geo.H3Service,
-	h3Index *redis.H3DriverIndex,
 	ranking matching.Ranker,
 	cfg *config.Config,
 	retryPolicy *matching.RetryPolicy,
 	logger *zap.Logger,
 ) *MatchingEngine {
 	return &MatchingEngine{
-		driverRepo:  driverRepo,
-		locker:      locker,
-		outboxRepo:  outboxRepo,
-		geo:         geo,
-		driverCache: driverCache,
-		h3:          h3,
-		h3Index:     h3Index,
-		ranking:     ranking,
-		cfg:         cfg,
-		retryPolicy: retryPolicy,
-		logger:      logger,
+		driverRepo:        driverRepo,
+		locker:            locker,
+		outboxRepo:        outboxRepo,
+		candidateSearcher: candidateSearcher,
+		driverCache:       driverCache,
+		ranking:           ranking,
+		cfg:               cfg,
+		retryPolicy:       retryPolicy,
+		logger:            logger,
 	}
 }
 
@@ -149,7 +144,20 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	pickupLng := 78.4867
 
 	// Get nearby driver IDs
-	candidateDriverIDs, err := e.findCandidateDriverIDs(ctx, pickupLat, pickupLng, initialDecision)
+	searchResult, err := e.candidateSearcher.FindCandidates(
+		ctx,
+		search.Request{
+			PickupLat: pickupLat,
+			PickupLng: pickupLng,
+
+			RadiusKm: initialDecision.RadiusKm,
+
+			CandidateLimit: initialDecision.CandidateLimit,
+
+			MatchingAttempt: attemptCount,
+		},
+	)
+
 	if err != nil {
 		e.logger.Error("candidate driver search failed",
 			zap.String("ride_id", rideID.String()),
@@ -158,8 +166,14 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		return fail("candidate_search_error", err)
 	}
 
+	candidateDriverIDs := searchResult.DriverIDs
+
 	span.SetAttributes(
+		attribute.String("matching.search_backend", searchResult.Backend),
+		attribute.Int("matching.cells_visited", searchResult.CellsVisited),
+		attribute.Int("matching.rings_visited", searchResult.RingsVisited),
 		attribute.Int("matching.nearby_driver_count", len(candidateDriverIDs)),
+		attribute.Float64("matching.radius_km", searchResult.RadiusKm),
 	)
 
 	if len(candidateDriverIDs) == 0 {
@@ -448,69 +462,4 @@ func (e *MatchingEngine) releaseReservedDriverAfterFailure(
 		zap.String("driver_id", driverID.String()),
 		zap.String("reason", reason),
 	)
-}
-
-func (e *MatchingEngine) findCandidateDriverIDs(
-	ctx context.Context,
-	pickupLat float64,
-	pickupLng float64,
-	decision matching.RetryDecision,
-) ([]uuid.UUID, error) {
-	ctx, span := matchingTracer.Start(ctx, "matching.candidate_search")
-	defer span.End()
-
-	if e.cfg.H3.Enabled {
-
-		span.SetAttributes(
-			attribute.String("search.backend", "h3"),
-			attribute.Int("candidate_limit", decision.CandidateLimit),
-		)
-
-		cells, err := e.h3.NeighborCells(pickupLat, pickupLng)
-		if err != nil {
-			return nil, err
-		}
-
-		ids, err := e.h3Index.GetDriversInCells(ctx, cells, decision.CandidateLimit)
-
-		if err != nil {
-			return nil, err
-		}
-
-		span.SetAttributes(
-			attribute.Int("candidate_count", len(ids)),
-		)
-
-		return ids, nil
-	}
-
-	span.SetAttributes(
-		attribute.String("search.backend", "geo"),
-		attribute.Float64("radius_km", decision.RadiusKm),
-		attribute.Int("candidate_limit", decision.CandidateLimit),
-	)
-
-	nearby, err := e.geo.FindNearbyDriversWithDistance(
-		ctx,
-		pickupLat,
-		pickupLng,
-		decision.RadiusKm,
-		decision.CandidateLimit,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	ids := make([]uuid.UUID, 0, len(nearby))
-
-	for _, d := range nearby {
-		ids = append(ids, d.ID)
-	}
-
-	span.SetAttributes(
-		attribute.Int("candidate_count", len(ids)),
-	)
-
-	return ids, nil
 }
