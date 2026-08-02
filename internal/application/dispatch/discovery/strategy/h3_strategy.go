@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/expansion"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
@@ -58,8 +59,12 @@ func (s *H3Strategy) FindCandidates(
 		return search.Result{}, err
 	}
 
+	collection := candidate.NewCollectionFromIDs(
+		state.DriverIDs,
+	)
+
 	return search.Result{
-		DriverIDs: state.DriverIDs,
+		Candidates: collection,
 
 		Backend: "h3",
 

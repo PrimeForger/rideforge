@@ -1,13 +1,14 @@
 package application
 
 import (
-	"container/heap"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/pipeline"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/strategy"
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
@@ -16,7 +17,6 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
-	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -28,15 +28,16 @@ import (
 var matchingTracer = otel.Tracer("application.matching")
 
 type MatchingEngine struct {
-	driverRepo        ports.DriverRepository
-	locker            ports.DriverLocker
-	outboxRepo        ports.OutboxRepository
+	driverRepo ports.DriverRepository
+	locker     ports.DriverLocker
+	outboxRepo ports.OutboxRepository
+
 	candidateSearcher strategy.CandidateSearcher
-	driverCache       *redis.DriverCache
-	ranking           matching.Ranker
-	cfg               *config.Config
-	retryPolicy       *matching.RetryPolicy
-	logger            *zap.Logger
+	candidatePipeline pipeline.Pipeline
+
+	cfg         *config.Config
+	retryPolicy *matching.RetryPolicy
+	logger      *zap.Logger
 }
 
 func NewMatchingEngine(
@@ -44,8 +45,7 @@ func NewMatchingEngine(
 	locker ports.DriverLocker,
 	outboxRepo ports.OutboxRepository,
 	candidateSearcher strategy.CandidateSearcher,
-	driverCache *redis.DriverCache,
-	ranking matching.Ranker,
+	candidatePipeline pipeline.Pipeline,
 	cfg *config.Config,
 	retryPolicy *matching.RetryPolicy,
 	logger *zap.Logger,
@@ -55,8 +55,7 @@ func NewMatchingEngine(
 		locker:            locker,
 		outboxRepo:        outboxRepo,
 		candidateSearcher: candidateSearcher,
-		driverCache:       driverCache,
-		ranking:           ranking,
+		candidatePipeline: candidatePipeline,
 		cfg:               cfg,
 		retryPolicy:       retryPolicy,
 		logger:            logger,
@@ -93,7 +92,10 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		span.SetAttributes(attribute.String("matching.final_result", result))
 	}()
 
-	// Count attempts
+	// -----------------------------------------------------------------------------
+	// Phase 1: Determine matching attempt and derive the initial dispatch strategy.
+	// -----------------------------------------------------------------------------
+
 	attemptCount, err := e.driverRepo.CountRideAttemptsTx(ctx, tx, rideID)
 	if err != nil {
 		e.logger.Error("failed to count matching attempts",
@@ -120,31 +122,28 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		AttemptCount: attemptCount,
 	})
 
-	radius := initialDecision.RadiusKm
-
 	span.SetAttributes(
 		attribute.Int("matching.attempt_count", attemptCount),
-		attribute.Float64("matching.radius_km", radius),
+		attribute.Float64("matching.initial_radius_km", initialDecision.RadiusKm),
 	)
 
 	e.logger.Info("matching started",
 		zap.String("ride_id", rideID.String()),
 		zap.Int("attempt_count", attemptCount),
-		zap.Float64("radius_km", radius),
+		zap.Float64("radius_km", initialDecision.RadiusKm),
 	)
-
-	// 2. Get available drivers excluding already tried
-	// drivers, err := e.driverRepo.GetAvailableDriversExcludingTx(ctx, tx, rideID)
-	// if err != nil {
-	// 	return err
-	// }
 
 	// TODO: replace with real pickup location
 	pickupLat := 17.3850
 	pickupLng := 78.4867
 
-	// Get nearby driver IDs
-	searchResult, err := e.candidateSearcher.FindCandidates(
+	// -----------------------------------------------------------------------------
+	// Phase 2: Discover nearby candidate drivers using the configured search
+	// strategy (H3, Geo, etc.). This stage performs discovery only and does not
+	// load driver details or rank candidates.
+	// -----------------------------------------------------------------------------
+
+	discoveryResult, err := e.candidateSearcher.FindCandidates(
 		ctx,
 		search.Request{
 			PickupLat: pickupLat,
@@ -166,251 +165,128 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		return fail("candidate_search_error", err)
 	}
 
-	candidateDriverIDs := searchResult.DriverIDs
+	// -----------------------------------------------------------------------------
+	// Phase 3: Execute the candidate pipeline.
+	//
+	// Responsibilities:
+	//   - Load driver data
+	//   - Filter unavailable drivers
+	//   - Filter already offered drivers
+	//   - Rank candidates
+	//   - Build ordered candidate source
+	//
+	// After this point MatchingEngine consumes candidates without knowing how
+	// they were filtered or ranked.
+	// -----------------------------------------------------------------------------
 
-	span.SetAttributes(
-		attribute.String("matching.search_backend", searchResult.Backend),
-		attribute.Int("matching.cells_visited", searchResult.CellsVisited),
-		attribute.Int("matching.rings_visited", searchResult.RingsVisited),
-		attribute.Int("matching.nearby_driver_count", len(candidateDriverIDs)),
-		attribute.Float64("matching.radius_km", searchResult.RadiusKm),
+	pipelineCtx := pipeline.NewContext(
+		rideID,
+		pickupLat,
+		pickupLng,
+		attemptCount,
 	)
 
-	if len(candidateDriverIDs) == 0 {
-		err := errors.New("no nearby drivers")
-
-		e.logger.Warn("no nearby drivers found",
-			zap.String("ride_id", rideID.String()),
-			zap.Float64("radius_km", radius),
-		)
-
-		return fail("no_nearby_drivers", err)
-	}
-
-	// Batch fetch drivers
-	// drivers, err := e.driverRepo.GetEligibleDriversTx(ctx, tx, rideID, nearbyIDs)
-	drivers, err := e.driverCache.GetDrivers(ctx, candidateDriverIDs)
-	if err != nil {
-		e.logger.Error("failed to fetch drivers from cache",
-			zap.String("ride_id", rideID.String()),
-			zap.Int("nearby_count", len(candidateDriverIDs)),
-			zap.Error(err),
-		)
-		return fail("driver_cache_error", err)
-	}
-
-	span.SetAttributes(
-		attribute.Int("matching.cached_driver_count", len(drivers)),
+	err = e.candidatePipeline.Execute(
+		ctx,
+		pipelineCtx,
+		discoveryResult.Candidates,
 	)
 
-	if len(drivers) == 0 {
-		err := errors.New("no eligible drivers")
-
-		e.logger.Warn("no drivers found in cache",
-			zap.String("ride_id", rideID.String()),
-			zap.Int("nearby_count", len(candidateDriverIDs)),
-		)
-
-		return fail("no_eligible_drivers", err)
-	}
-
-	offeredSet, err := e.driverCache.GetOfferedDrivers(ctx, rideID)
 	if err != nil {
-		e.logger.Error("failed to fetch offered driver set",
+		e.logger.Error("candidate pipeline execution failed",
 			zap.String("ride_id", rideID.String()),
 			zap.Error(err),
 		)
-		return fail("offered_set_error", err)
+		return fail("candidate_pipeline_error", err)
 	}
 
 	span.SetAttributes(
-		attribute.Int("matching.already_offered_count", len(offeredSet)),
+		attribute.String("matching.discovery_backend", discoveryResult.Backend),
+		attribute.Int("matching.cells_visited", discoveryResult.CellsVisited),
+		attribute.Int("matching.rings_visited", discoveryResult.RingsVisited),
+		attribute.Float64("matching.discovery_radius_km", discoveryResult.RadiusKm),
+		attribute.Int("matching.loaded_candidates", pipelineCtx.Result.LoadedCandidates),
+		attribute.Int("matching.filtered_candidates", pipelineCtx.Result.FilteredCandidates),
+		attribute.Int("matching.ranked_candidates", pipelineCtx.Result.RankedCandidates),
 	)
 
-	eligibleCount := 0
+	// -----------------------------------------------------------------------------
+	// Phase 4: Recompute the dispatch strategy using pipeline statistics.
+	// The initial strategy is based only on retry count.
+	// This strategy also considers actual candidate availability.
+	// -----------------------------------------------------------------------------
 
-	for _, d := range drivers {
-
-		if !d.IsAvailable() {
-			continue
-		}
-
-		if _, exists := offeredSet[d.ID]; exists {
-			continue
-		}
-
-		eligibleCount++
-	}
-
-	decision := e.retryPolicy.Decide(matching.RetryInput{
+	dispatchDecision := e.retryPolicy.Decide(matching.RetryInput{
 		AttemptCount:        attemptCount,
-		NearbyDriverCount:   len(candidateDriverIDs),
-		EligibleDriverCount: eligibleCount,
+		NearbyDriverCount:   pipelineCtx.Result.LoadedCandidates,
+		EligibleDriverCount: pipelineCtx.Result.RankedCandidates,
 	})
 
 	e.logger.Info("adaptive retry decision selected",
 		zap.String("ride_id", rideID.String()),
 		zap.Int("attempt_count", attemptCount),
-		zap.Float64("radius_km", decision.RadiusKm),
-		zap.Int("offer_batch_size", decision.OfferBatchSize),
-		zap.Int("candidate_limit", decision.CandidateLimit),
-		zap.Duration("offer_timeout", decision.OfferTimeout),
-		zap.Int("nearby_drivers", len(candidateDriverIDs)),
-		zap.Int("eligible_drivers", eligibleCount),
+		zap.Float64("radius_km", dispatchDecision.RadiusKm),
+		zap.Int("offer_batch_size", dispatchDecision.OfferBatchSize),
+		zap.Int("candidate_limit", dispatchDecision.CandidateLimit),
+		zap.Duration("offer_timeout", dispatchDecision.OfferTimeout),
+		zap.Int("loaded_candidates", pipelineCtx.Result.LoadedCandidates),
+		zap.Int("filtered_candidates", pipelineCtx.Result.FilteredCandidates),
+		zap.Int("ranked_candidates", pipelineCtx.Result.RankedCandidates),
 	)
 
 	span.SetAttributes(
-		attribute.Float64("matching.radius_km", decision.RadiusKm),
-		attribute.Int("matching.offer_batch_size", decision.OfferBatchSize),
-		attribute.Int("matching.candidate_limit", decision.CandidateLimit),
-		attribute.Int64("matching.offer_timeout_ms", decision.OfferTimeout.Milliseconds()),
-		attribute.Int("matching.eligible_driver_count", eligibleCount),
+		attribute.Float64("matching.offer_radius_km", dispatchDecision.RadiusKm),
+		attribute.Int("matching.offer_batch_size", dispatchDecision.OfferBatchSize),
+		attribute.Int("matching.candidate_limit", dispatchDecision.CandidateLimit),
+		attribute.Int64("matching.offer_timeout_ms", dispatchDecision.OfferTimeout.Milliseconds()),
 	)
 
-	// Build heap
-	h := &matching.MaxHeap{}
-	heap.Init(h)
+	// -----------------------------------------------------------------------------
+	// Phase 5: Offer drivers in ranking order until the configured batch size
+	// has been reached.
+	//
+	// Candidate ordering is already determined by the pipeline.
+	// MatchingEngine only reserves, persists and publishes offers.
+	// -----------------------------------------------------------------------------
 
-	for _, d := range drivers {
+	offered := 0
 
-		if !d.IsAvailable() {
-			continue
+	for {
+		candidate, ok := pipelineCtx.Result.Candidates.Next()
+		if !ok || offered >= dispatchDecision.OfferBatchSize {
+			break
 		}
 
-		if _, exists := offeredSet[d.ID]; exists {
-			continue
-		}
-
-		// distance := e.geo.Distance(ctx, pickupLat, pickupLng, driver.ID)
-
-		distance := matching.HaversineDistanceKm(
-			pickupLat,
-			pickupLng,
-			d.Lat,
-			d.Lng,
+		offeredNow, err := e.offerCandidate(
+			ctx,
+			tx,
+			rideID,
+			attemptCount+1,
+			dispatchDecision,
+			candidate,
 		)
-
-		score := e.ranking.Score(d, distance)
-
-		heap.Push(h, matching.Candidate{
-			DriverID: d.ID,
-			Score:    score,
-			// Distance: distance,
-		})
-	}
-
-	span.SetAttributes(
-		attribute.Int("matching.candidate_count", h.Len()),
-	)
-
-	if h.Len() == 0 {
-		err := errors.New("no eligible drivers after filtering")
-
-		e.logger.Warn("no eligible drivers after filtering",
-			zap.String("ride_id", rideID.String()),
-			zap.Int("cache_driver_count", len(drivers)),
-			zap.Int("already_offered_count", len(offeredSet)),
-		)
-
-		return fail("no_eligible_after_filtering", err)
-	}
-
-	// Offer top N drivers (parallel batch)
-	selected := 0
-
-	for h.Len() > 0 && selected < decision.OfferBatchSize {
-
-		candidate := heap.Pop(h).(matching.Candidate)
-
-		ok, err := e.locker.Reserve(ctx, candidate.DriverID, rideID)
 		if err != nil {
-			e.logger.Error("failed to reserve driver",
-				zap.String("ride_id", rideID.String()),
-				zap.String("driver_id", candidate.DriverID.String()),
-				zap.Error(err),
-			)
-			return fail("driver_reserve_error", err)
+			return fail("offer_candidate_error", err)
 		}
 
-		if !ok {
-			observability.DriverOffersTotal.WithLabelValues("reserve_skipped").Inc()
-			e.logger.Debug("driver reservation skipped",
-				zap.String("ride_id", rideID.String()),
-				zap.String("driver_id", candidate.DriverID.String()),
-				zap.Float64("score", candidate.Score),
-			)
-			continue
+		if offeredNow {
+			offered++
 		}
-
-		e.logger.Info("driver reserved for offer",
-			zap.String("ride_id", rideID.String()),
-			zap.String("driver_id", candidate.DriverID.String()),
-			zap.Int("attempt", attemptCount+1),
-			zap.Float64("score", candidate.Score),
-		)
-
-		// Record attempt in DB
-		if err := e.driverRepo.InsertRideOfferTx(ctx, tx, rideID, candidate.DriverID, attemptCount+1); err != nil {
-			e.logger.Error("failed to insert ride driver offer",
-				zap.String("ride_id", rideID.String()),
-				zap.String("driver_id", candidate.DriverID.String()),
-				zap.Error(err),
-			)
-			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "insert_offer_failed")
-
-			return fail("insert_offer_error", err)
-		}
-
-		event := events.DriverOfferedEvent{
-			RideID:          rideID,
-			DriverID:        candidate.DriverID,
-			OfferTimeoutMs:  decision.OfferTimeout.Milliseconds(),
-			MatchingAttempt: attemptCount + 1,
-			SearchRadiusKm:  decision.RadiusKm,
-		}
-
-		envelope := appevents.Envelope{
-			ID:        uuid.NewString(),
-			Type:      event.Name(),
-			Aggregate: rideID.String(),
-			Data:      event,
-			Occurred:  time.Now(),
-		}
-
-		payload, err := json.Marshal(envelope)
-		if err != nil {
-			e.logger.Error("failed to marshal driver offered event",
-				zap.String("ride_id", rideID.String()),
-				zap.String("driver_id", candidate.DriverID.String()),
-				zap.Error(err),
-			)
-			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "marshal_offer_event_failed")
-
-			return fail("marshal_offer_event_error", err)
-		}
-
-		if err := e.outboxRepo.Insert(ctx, tx,
-			outbox.NewEvent(rideID, envelope.Type, payload),
-		); err != nil {
-			e.logger.Error("failed to insert driver offered outbox event",
-				zap.String("ride_id", rideID.String()),
-				zap.String("driver_id", candidate.DriverID.String()),
-				zap.Error(err),
-			)
-			e.releaseReservedDriverAfterFailure(ctx, rideID, candidate.DriverID, "outbox_insert_failed")
-
-			return fail("outbox_insert_error", err)
-		}
-
-		observability.DriverOffersTotal.WithLabelValues("offered").Inc()
-		selected++
 	}
 
 	span.SetAttributes(
-		attribute.Int("matching.selected_driver_count", selected),
+		attribute.Int("matching.offered_driver_count", offered),
+		attribute.Bool("matching.success", offered > 0),
 	)
 
-	if selected == 0 {
+	// -----------------------------------------------------------------------------
+	// Phase 6: Complete matching.
+	//
+	// Matching succeeds if at least one driver has been offered.
+	// Retry orchestration happens outside this handler.
+	// -----------------------------------------------------------------------------
+
+	if offered == 0 {
 		err := errors.New("no drivers reserved")
 
 		e.logger.Warn("matching completed with no drivers reserved",
@@ -422,13 +298,124 @@ func (e *MatchingEngine) HandleMatchingStarted(
 
 	e.logger.Info("matching completed",
 		zap.String("ride_id", rideID.String()),
-		zap.Int("selected_drivers", selected),
+		zap.Int("offered_drivers", offered),
 	)
 
 	result = "success"
 	span.SetAttributes(attribute.String("matching.result", "success"))
 
 	return nil
+}
+
+func (e *MatchingEngine) offerCandidate(
+	ctx context.Context,
+	tx *sql.Tx,
+	rideID uuid.UUID,
+	attempt int,
+	dispatchDecision matching.RetryDecision,
+	candidate *candidate.Candidate,
+) (bool, error) {
+
+	driverID := candidate.ID
+
+	// Reserve the driver atomically.
+	// Another dispatcher may have already reserved this driver.
+
+	reserved, err := e.locker.Reserve(ctx, driverID, rideID)
+	if err != nil {
+		e.logger.Error("failed to reserve driver",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+
+		return false, err
+	}
+
+	if !reserved {
+		observability.DriverOffersTotal.WithLabelValues("reserve_skipped").Inc()
+		e.logger.Debug("driver reservation skipped",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+		)
+
+		return false, nil
+	}
+
+	e.logger.Info("driver reserved for offer",
+		zap.String("ride_id", rideID.String()),
+		zap.String("driver_id", driverID.String()),
+		zap.Int("attempt", attempt),
+	)
+
+	// Persist the ride offer before publishing any event.
+	// If persistence fails the reservation must be released.
+
+	if err := e.driverRepo.InsertRideOfferTx(ctx, tx, rideID, driverID, attempt); err != nil {
+		e.logger.Error("failed to insert ride driver offer",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+		e.releaseReservedDriverAfterFailure(ctx, rideID, driverID, "insert_offer_failed")
+
+		return false, err
+	}
+
+	// -------------------------------------------------------------------------
+	// Build the Driver Offered domain event.
+	// -------------------------------------------------------------------------
+
+	event := events.DriverOfferedEvent{
+		RideID:          rideID,
+		DriverID:        driverID,
+		OfferTimeoutMs:  dispatchDecision.OfferTimeout.Milliseconds(),
+		MatchingAttempt: attempt,
+		SearchRadiusKm:  dispatchDecision.RadiusKm,
+	}
+
+	envelope := appevents.Envelope{
+		ID:        uuid.NewString(),
+		Type:      event.Name(),
+		Aggregate: rideID.String(),
+		Data:      event,
+		Occurred:  time.Now(),
+	}
+
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+
+		e.logger.Error("failed to marshal driver offered event",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+		e.releaseReservedDriverAfterFailure(ctx, rideID, driverID, "marshal_offer_event_failed")
+
+		return false, err
+	}
+
+	// -------------------------------------------------------------------------
+	// Publish the offer asynchronously using the transactional outbox.
+	// -------------------------------------------------------------------------
+
+	if err := e.outboxRepo.Insert(ctx, tx,
+		outbox.NewEvent(rideID, envelope.Type, payload),
+	); err != nil {
+
+		e.logger.Error("failed to insert driver offered outbox event",
+			zap.String("ride_id", rideID.String()),
+			zap.String("driver_id", driverID.String()),
+			zap.Error(err),
+		)
+		e.releaseReservedDriverAfterFailure(ctx, rideID, driverID, "outbox_insert_failed")
+
+		return false, err
+	}
+
+	observability.DriverOffersTotal.WithLabelValues("offered").Inc()
+
+	return true, nil
 }
 
 func (e *MatchingEngine) releaseReservedDriverAfterFailure(

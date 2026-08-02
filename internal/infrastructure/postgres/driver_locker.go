@@ -56,7 +56,7 @@ func (l *DBDriverLocker) ReserveTx(ctx context.Context, tx *sql.Tx, driverID uui
 func (l *DBDriverLocker) Release(ctx context.Context, driverID uuid.UUID, rideID uuid.UUID) (bool, error) {
 	res, err := l.db.ExecContext(ctx, `
 		UPDATE drivers 
-		SET status = 'ONLINE' 
+		SET status = 'ONLINE',
 			reserved_for_ride = NULL,
 			reserved_at = NULL
 		WHERE id = $1
@@ -76,7 +76,7 @@ func (l *DBDriverLocker) Release(ctx context.Context, driverID uuid.UUID, rideID
 func (l *DBDriverLocker) ReleaseTx(ctx context.Context, tx *sql.Tx, driverID uuid.UUID, rideID uuid.UUID) (bool, error) {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE drivers 
-		SET status = 'ONLINE' 
+		SET status = 'ONLINE',
 			reserved_for_ride = NULL,
 			reserved_at = NULL
 		WHERE id = $1

@@ -7,6 +7,18 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 )
 
+// Determine dispatch parameters for the current matching attempt.
+//
+// Inputs:
+//   - Retry count
+//   - Candidate availability
+//
+// Outputs:
+//   - Search radius
+//   - Candidate limit
+//   - Offer batch size
+//   - Offer timeout
+
 type RetryPolicy struct {
 	cfg config.MatchingRetryConfig
 }

@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/google/uuid"
@@ -43,8 +44,10 @@ func (s *GeoStrategy) FindCandidates(
 		ids = append(ids, d.ID)
 	}
 
+	collection := candidate.NewCollectionFromIDs(ids)
+
 	return search.Result{
-		DriverIDs: ids,
+		Candidates: collection,
 
 		Backend: "geo",
 
