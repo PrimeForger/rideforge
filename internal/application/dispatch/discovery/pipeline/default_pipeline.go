@@ -12,7 +12,7 @@ type DefaultPipeline struct {
 	stages []policy.SearchProfileRule
 }
 
-func NewDefaultPipeline(
+func New(
 	stages ...policy.SearchProfileRule,
 ) *DefaultPipeline {
 

@@ -1,9 +1,11 @@
 package search
 
-import "github.com/google/uuid"
+import "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
 
 type Result struct {
-	DriverIDs []uuid.UUID
+	// DriverIDs []uuid.UUID
+	// Iterator   candidate.Iterator
+	Candidates *candidate.Collection
 
 	Backend string
 

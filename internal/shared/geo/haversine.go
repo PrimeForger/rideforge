@@ -1,4 +1,4 @@
-package matching
+package geo
 
 import "math"
 

@@ -4,9 +4,12 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
+	candidatepipeline "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/pipeline"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/ranking"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/stage"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/density"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/expansion"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/pipeline"
+	profilepipeline "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/pipeline"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/policy"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/profile"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
@@ -134,7 +137,7 @@ func NewContainer() (*Container, error) {
 	)
 
 	// --- Application Utilities (Ranking Engine) ---
-	rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
+	// rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
 	retryPolicy := matching.NewRetryPolicy(cfg.MatchingRetry)
 
 	// --- Application Services ---
@@ -150,7 +153,7 @@ func NewContainer() (*Container, error) {
 
 	densityRule := policy.NewDensityRule(densityProvider, densityClassifier, expansionProfileProvider)
 
-	profilePipeline := pipeline.NewDefaultPipeline(
+	profilePipeline := profilepipeline.New(
 		densityRule,
 	)
 
@@ -176,7 +179,33 @@ func NewContainer() (*Container, error) {
 		candidateSearcher = geoStrategy
 	}
 
-	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, candidateSearcher, driverCache, rankingEngine, cfg, retryPolicy, log)
+	// -----------------------------------------------------------------------------
+	// Candidate Ranking
+	// -----------------------------------------------------------------------------
+
+	featureExtractor := ranking.NewDefaultFeatureExtractor()
+
+	scorer := ranking.NewDefaultScorer(&cfg.Ranking)
+
+	ranker := ranking.NewDefaultRanker(
+		featureExtractor,
+		scorer,
+	)
+
+	// -----------------------------------------------------------------------------
+	// Candidate Pipeline
+	// -----------------------------------------------------------------------------
+
+	candidatePipeline := candidatepipeline.New(
+		stage.NewDefaultDriverLoader(driverCache),
+		stage.NewAvailabilityFilter(),
+		stage.NewAlreadyOfferedFilter(driverCache),
+		stage.NewRankingStage(ranker),
+		stage.NewHeapBuilder(),
+	)
+
+	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, candidateSearcher, candidatePipeline, cfg, retryPolicy, log)
+
 	driverLocationService := application.NewDriverLocationService(geoService, driverCache, h3Service, h3Index, cfg)
 	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, driverLocationService)
 	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)
