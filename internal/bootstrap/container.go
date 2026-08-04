@@ -4,18 +4,8 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
-	candidatepipeline "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/pipeline"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/ranking"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/stage"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/density"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/expansion"
-	profilepipeline "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/pipeline"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/policy"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/profile"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/selector"
-	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/strategy"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
+	"github.com/ashadashraf/ride-hail-app/internal/bootstrap/builders"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
@@ -147,61 +137,28 @@ func NewContainer() (*Container, error) {
 	// Candidate Discovery
 	// -----------------------------------------------------------------------------
 
-	densityClassifier := density.NewDensityClassifier(cfg.Matching.SparseDriverThreshold, cfg.Matching.DenseDriverThreshold)
-
-	expansionProfileProvider := profile.NewDefaultExpansionProfileProvider(h3Service.MaxSearchRing())
-
-	densityRule := policy.NewDensityRule(densityProvider, densityClassifier, expansionProfileProvider)
-
-	profilePipeline := profilepipeline.New(
-		densityRule,
+	candidateSearcher := builders.BuildCandidateSearcher(
+		cfg,
+		h3Service,
+		h3Index,
+		geoService,
+		densityProvider,
 	)
-
-	profileSelector := selector.NewDefaultSelector(profilePipeline)
-
-	// expansionPolicy := candidates.NewDefaultRingExpansionPolicy(h3Service.MaxSearchRing())
-	ringExpansionPolicy := expansion.NewAdaptiveRingExpansionPolicy(
-		profileSelector,
-	)
-
-	ringExpander := expansion.NewRingExpander(h3Service, h3Index, ringExpansionPolicy)
-
-	budgetFactory := search.NewDefaultBudgetFactory(h3Service.MaxSearchRing())
-
-	h3Strategy := strategy.NewH3Strategy(h3Service, ringExpander, budgetFactory)
-	geoStrategy := strategy.NewGeoStrategy(geoService)
-
-	var candidateSearcher strategy.CandidateSearcher
-
-	if cfg.H3.Enabled {
-		candidateSearcher = h3Strategy
-	} else {
-		candidateSearcher = geoStrategy
-	}
 
 	// -----------------------------------------------------------------------------
 	// Candidate Ranking
 	// -----------------------------------------------------------------------------
 
-	featureExtractor := ranking.NewDefaultFeatureExtractor()
-
-	scorer := ranking.NewDefaultScorer(&cfg.Ranking)
-
-	ranker := ranking.NewDefaultRanker(
-		featureExtractor,
-		scorer,
-	)
+	ranker := builders.BuildRanker(&cfg.Ranking)
 
 	// -----------------------------------------------------------------------------
 	// Candidate Pipeline
 	// -----------------------------------------------------------------------------
 
-	candidatePipeline := candidatepipeline.New(
-		stage.NewDefaultDriverLoader(driverCache),
-		stage.NewAvailabilityFilter(),
-		stage.NewAlreadyOfferedFilter(driverCache),
-		stage.NewRankingStage(ranker),
-		stage.NewHeapBuilder(),
+	candidatePipeline := builders.BuildCandidatePipeline(
+		driverCache,
+		driverCache,
+		ranker,
 	)
 
 	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, candidateSearcher, candidatePipeline, cfg, retryPolicy, log)
