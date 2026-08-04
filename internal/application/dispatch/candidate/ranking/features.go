@@ -1,17 +1,9 @@
 package ranking
 
-import "time"
-
 type Features struct {
-	DistanceKm float64
+	Travel TravelFeatures
 
-	AcceptanceRate   float64
-	CancellationRate float64
-	TimeoutRate      float64
+	Quality QualityFeatures
 
-	Rating float64
-
-	CompletedTrips int
-
-	LastAssignedAt time.Time
+	Fairness FairnessFeatures
 }

@@ -14,7 +14,14 @@ type Context struct {
 
 	RetryAttempt int
 
+	SearchRadiusKm float64
+	CandidateLimit int
+
 	StartedAt time.Time
 
 	Result Result
+}
+
+func (c *Context) Duration() time.Duration {
+	return time.Since(c.StartedAt)
 }

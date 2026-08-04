@@ -184,6 +184,8 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		pickupLat,
 		pickupLng,
 		attemptCount,
+		initialDecision.RadiusKm,
+		initialDecision.CandidateLimit,
 	)
 
 	err = e.candidatePipeline.Execute(

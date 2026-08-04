@@ -8,10 +8,17 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/shared/geo"
 )
 
-type DefaultFeatureExtractor struct{}
+type DefaultFeatureExtractor struct {
+	enrichers []Enricher
+}
 
-func NewDefaultFeatureExtractor() *DefaultFeatureExtractor {
-	return &DefaultFeatureExtractor{}
+func NewDefaultFeatureExtractor(
+	enrichers ...Enricher,
+) *DefaultFeatureExtractor {
+
+	return &DefaultFeatureExtractor{
+		enrichers: enrichers,
+	}
 }
 
 func (e *DefaultFeatureExtractor) Extract(
@@ -29,17 +36,35 @@ func (e *DefaultFeatureExtractor) Extract(
 		d.Lng,
 	)
 
-	return Features{
-		DistanceKm: distance,
+	features := Features{
+		Travel: TravelFeatures{
+			DistanceKm: distance,
+			ETASeconds: 0,
+		},
 
-		AcceptanceRate:   d.AcceptanceRate,
-		CancellationRate: d.CancellationRate,
-		TimeoutRate:      d.TimeoutRate,
+		Quality: QualityFeatures{
+			AcceptanceRate:   d.AcceptanceRate,
+			CancellationRate: d.CancellationRate,
+			TimeoutRate:      d.TimeoutRate,
+			Rating:           d.Rating,
+			CompletedTrips:   d.CompletedRides,
+		},
 
-		Rating: d.Rating,
+		Fairness: FairnessFeatures{
+			LastAssignedAt: d.LastAssignedAt,
+		},
+	}
 
-		CompletedTrips: d.CompletedRides,
+	for _, enricher := range e.enrichers {
+		if err := enricher.Enrich(
+			ctx,
+			pipelineCtx,
+			c,
+			&features,
+		); err != nil {
+			return Features{}, err
+		}
+	}
 
-		LastAssignedAt: d.LastAssignedAt,
-	}, nil
+	return features, nil
 }

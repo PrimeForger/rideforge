@@ -80,7 +80,7 @@ func (c *DriverCache) IsConnected(
 
 // Connection
 
-func (c *DriverCache) GetDrivers(ctx context.Context, driverIDs []uuid.UUID) ([]*driver.Driver, error) {
+func (c *DriverCache) LoadDrivers(ctx context.Context, driverIDs []uuid.UUID) ([]*driver.Driver, error) {
 
 	pipe := c.client.rdb.Pipeline()
 

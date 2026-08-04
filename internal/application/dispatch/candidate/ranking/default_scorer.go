@@ -2,7 +2,6 @@ package ranking
 
 import (
 	"context"
-	"math"
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
@@ -11,11 +10,18 @@ import (
 
 type DefaultScorer struct {
 	cfg *config.RankingConfig
+
+	qualityCalculator *QualityCalculator
 }
 
-func NewDefaultScorer(cfg *config.RankingConfig) *DefaultScorer {
+func NewDefaultScorer(
+	cfg *config.RankingConfig,
+) *DefaultScorer {
+
 	return &DefaultScorer{
 		cfg: cfg,
+
+		qualityCalculator: NewQualityCalculator(cfg),
 	}
 }
 
@@ -24,28 +30,25 @@ func (s *DefaultScorer) Score(
 	f Features,
 ) (candidate.Score, error) {
 
+	travel := f.Travel
+	quality := f.Quality
+	fairness := f.Fairness
+
 	// Normalize inputs (avoid dominance)
-	distanceScore := 1 / (1 + f.DistanceKm)
+	distanceScore := 1 / (1 + travel.DistanceKm)
 
-	acceptanceScore := f.AcceptanceRate
-	cancellationPenalty := 1 - f.CancellationRate
-	timeoutPenalty := 1 - f.TimeoutRate
-
-	ratingScore := f.Rating / 5.0
-
-	experienceScore := math.Log(float64(f.CompletedTrips) + 1)
+	qualityScore := s.qualityCalculator.Calculate(
+		quality,
+	)
 
 	// fairness boost (older idle drivers get slight boost)
-	fairnessScore := time.Since(f.LastAssignedAt).Seconds() / 3600
+	fairnessScore := time.Since(fairness.LastAssignedAt).Seconds() / 3600
 
 	// Final weighted score
-	finalScore := (s.cfg.DistanceWeight * distanceScore) +
-		(s.cfg.AcceptanceWeight * acceptanceScore) +
-		(s.cfg.CancellationWeight * cancellationPenalty) +
-		(s.cfg.TimeoutWeight * timeoutPenalty) +
-		(s.cfg.RatingWeight * ratingScore) +
-		(s.cfg.ExperienceWeight * experienceScore) +
-		(s.cfg.FairnessWeight * fairnessScore)
+	finalScore :=
+		(s.cfg.DistanceWeight * distanceScore) +
+			(s.cfg.FairnessWeight * fairnessScore) +
+			qualityScore
 
 	return candidate.Score{
 		Value: finalScore,

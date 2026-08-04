@@ -12,15 +12,15 @@ import (
 // Subsequent stages operate only on enriched candidates.
 
 type DefaultDriverLoader struct {
-	driverCache DriverCache
+	source BatchDataSource
 }
 
 func NewDefaultDriverLoader(
-	driverCache DriverCache,
+	source BatchDataSource,
 ) *DefaultDriverLoader {
 
 	return &DefaultDriverLoader{
-		driverCache: driverCache,
+		source: source,
 	}
 }
 
@@ -43,7 +43,7 @@ func (l *DefaultDriverLoader) Execute(
 		ids = append(ids, candidate.ID)
 	}
 
-	drivers, err := l.driverCache.GetDrivers(
+	drivers, err := l.source.LoadDrivers(
 		ctx,
 		ids,
 	)
@@ -51,11 +51,15 @@ func (l *DefaultDriverLoader) Execute(
 		return err
 	}
 
+	candidateIndex := make(map[uuid.UUID]*candidate.Candidate, candidates.Len())
+
+	candidates.ForEach(func(c *candidate.Candidate) {
+		candidateIndex[c.ID] = c
+	})
+
 	for _, d := range drivers {
 
-		candidate := candidates.FindByID(
-			d.ID,
-		)
+		candidate := candidateIndex[d.ID]
 
 		if candidate == nil {
 			continue
@@ -64,7 +68,7 @@ func (l *DefaultDriverLoader) Execute(
 		candidate.Driver = d
 	}
 
-	pipelineCtx.Result.LoadedCandidates = len(drivers)
+	pipelineCtx.Result.LoadedCandidates += len(drivers)
 
 	return nil
 }

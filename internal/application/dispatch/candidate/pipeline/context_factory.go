@@ -11,6 +11,8 @@ func NewContext(
 	pickupLat float64,
 	pickupLng float64,
 	retryAttempt int,
+	searchRadiusKm float64,
+	candidateLimit int,
 ) *Context {
 
 	return &Context{
@@ -20,6 +22,9 @@ func NewContext(
 		PickupLng: pickupLng,
 
 		RetryAttempt: retryAttempt,
+
+		SearchRadiusKm: searchRadiusKm,
+		CandidateLimit: candidateLimit,
 
 		StartedAt: time.Now(),
 	}
