@@ -34,23 +34,64 @@ func (s *DefaultScorer) Score(
 	quality := f.Quality
 	fairness := f.Fairness
 
-	// Normalize inputs (avoid dominance)
-	distanceScore := 1 / (1 + travel.DistanceKm)
+	var travelScore float64
+	if travel.ETASeconds > 0 {
+		travelScore = s.calculateETAScore(travel.ETASeconds)
+	} else {
+		travelScore = s.calculateDistanceScore(travel.DistanceKm)
+	}
 
 	qualityScore := s.qualityCalculator.Calculate(
 		quality,
 	)
 
 	// fairness boost (older idle drivers get slight boost)
-	fairnessScore := time.Since(fairness.LastAssignedAt).Seconds() / 3600
+	var fairnessScore float64
+	if !fairness.LastAssignedAt.IsZero() {
+		idleSec := time.Since(fairness.LastAssignedAt).Seconds()
+		if idleSec > 0 {
+			fairnessScore = idleSec / 3600.0
+		}
+	}
 
 	// Final weighted score
 	finalScore :=
-		(s.cfg.DistanceWeight * distanceScore) +
+		(s.cfg.DistanceWeight * travelScore) +
 			(s.cfg.FairnessWeight * fairnessScore) +
 			qualityScore
 
 	return candidate.Score{
 		Value: finalScore,
 	}, nil
+}
+
+func (s *DefaultScorer) calculateETAScore(etaSeconds float64) float64 {
+	maxETA := s.cfg.MaxETASeconds
+	if maxETA <= 0 || etaSeconds >= maxETA || etaSeconds <= 0 {
+		return 0.0
+	}
+
+	score := 1.0 - (etaSeconds / maxETA)
+	if score < 0.0 {
+		return 0.0
+	}
+	if score > 1.0 {
+		return 1.0
+	}
+	return score
+}
+
+func (s *DefaultScorer) calculateDistanceScore(distanceKm float64) float64 {
+	if distanceKm < 0 {
+		return 0.0
+	}
+
+	score := 1.0 / (1.0 + distanceKm)
+	if score < 0.0 {
+		return 0.0
+	}
+	if score > 1.0 {
+		return 1.0
+	}
+	return score
 }

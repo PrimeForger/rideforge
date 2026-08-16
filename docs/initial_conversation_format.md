@@ -1,43 +1,76 @@
-You are now working on the RideForge project.
+# RideForge — AI Agent Context Initialization
 
-I am going to provide you with the project context-loading instruction document:
+Before doing any implementation, analysis, modification, or recommendation for this project, first locate and read:
 
-RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md
+`RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md`
 
-Your first task is to read and follow that document completely.
+This file is the authoritative instruction for how you must build your understanding of the RideForge project.
 
-The document is the authoritative guide for:
+## Your First Responsibility
 
-- Understanding the RideForge project structure
-- Identifying which documentation belongs to which architectural concern
-- Determining which files you need to load for a given task
-- Understanding the correct order in which project documentation should be read
-- Avoiding unnecessary documentation loading and excessive context consumption
-- Understanding the relationship between architecture documentation, ADRs, diagrams, AI/ML documentation, development documentation, and source code
+Read `RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md` completely and follow the instructions defined inside it.
 
-Important instructions:
+Do not start working on the actual task yet.
 
-1. Do not start implementing anything yet.
-2. Do not make architectural assumptions before following the context-loading instructions.
-3. Follow the document's recommended context-loading process.
-4. Load only the documentation necessary to establish the required context.
-5. Do not unnecessarily load the entire documentation repository if the task does not require it.
-6. Treat the project's ADRs as the record of architectural decisions and their rationale.
-7. Treat the current repository/source code as the implementation reality that must be inspected before making implementation changes.
-8. When documentation and implementation differ, do not silently assume which one is correct. Identify the discrepancy and reason from the project's documented architecture and current implementation.
-9. Preserve the project's existing architectural decisions unless my task explicitly requires changing them.
-10. Avoid over-engineering. Prefer the simplest production-grade solution that fits the established RideForge architecture.
-11. Before implementing a significant architectural change, identify the relevant ADRs and documentation that govern that area.
-12. For AI/ML-related work, follow the loading strategy defined in the context document and load only the relevant files from the 05-ai documentation.
-13. Keep token/context usage efficient. Do not load documents merely because they exist.
+The context-loading document will tell you:
 
-After you have finished processing the context-loading instruction document and the required initial project context, do not begin any implementation.
+- Which project documentation must be loaded.
+- Which documents are authoritative for different types of decisions.
+- The correct order in which documentation should be understood.
+- Which documents are relevant to dispatch, architecture, AI, geospatial systems, configuration, reliability, etc.
+- Which documents should only be loaded when relevant to the requested task.
+- How to avoid consuming unnecessary context/tokens.
+- How to resolve conflicts between documents.
+- Which terminology and architectural principles must be preserved.
+- How the existing architecture and business rules are expected to be handled.
+- What constraints must not be violated when modifying the application.
 
-Instead, reply only with a concise confirmation that you have:
+## Important Instructions
 
-- understood the context-loading instructions,
-- identified the project's documentation hierarchy,
-- understood how to select relevant documentation for future tasks,
-- and are ready for my task.
+Treat the documentation referenced by the context-loading file as the project's established architectural and business context.
 
-I will provide the actual question, implementation task, or change request in my next message.
+Do not assume that a common industry implementation is automatically correct for RideForge.
+
+Before making an architectural or implementation decision:
+
+1. Check the relevant project documentation.
+2. Follow the documented business rules.
+3. Follow the applicable ADRs.
+4. Follow the architecture/component documentation.
+5. Preserve existing constraints and decisions unless the task explicitly asks to change them.
+6. If multiple documents are relevant, load only the necessary ones according to the context-loading instructions.
+7. Do not unnecessarily load the entire documentation tree.
+
+### Dispatch-Specific Requirement
+
+Pay particular attention to the documented distinction between:
+
+- Smart Stand Dispatch
+- Smart Dispatch
+- AI-assisted optimization
+- Hierarchical dispatch configuration
+- Cross-location candidate discovery
+- Candidate eligibility vs candidate preference
+- Geographic discovery vs legal eligibility
+
+Do not reinterpret these concepts using assumptions from Uber, Ola, Rapido, or other systems unless explicitly requested.
+
+## Handling Conflicts or Ambiguity
+
+If the documentation appears to contain conflicting information:
+
+1. Follow the precedence rules defined in `RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md`.
+2. Check the relevant ADR and authoritative business/architecture documentation.
+3. Do not silently invent a resolution.
+4. Clearly identify the conflict before making a consequential architectural change.
+5. Preserve established behavior unless the requested task explicitly changes it.
+
+## Do Not Start the Task Yet
+
+At this stage, your only job is to initialize your understanding of the project.
+
+After reading the context-loading instructions and the relevant documents required by them, briefly confirm that you have completed the context initialization.
+
+Do **not** implement anything yet.
+
+I will provide the actual question/task in my next message.

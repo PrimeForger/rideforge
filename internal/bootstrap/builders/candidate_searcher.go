@@ -6,6 +6,7 @@ import (
 	profilepipeline "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/pipeline"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/policy"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/profile"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/refinement"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/selector"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/strategy"
@@ -20,6 +21,7 @@ func BuildCandidateSearcher(
 	h3Index *redis.H3DriverIndex,
 	geoService *redis.GeoService,
 	densityProvider density.DriverDensityProvider,
+	geoRefiner refinement.Refiner,
 ) strategy.CandidateSearcher {
 
 	densityClassifier := density.NewDensityClassifier(cfg.Matching.SparseDriverThreshold, cfg.Matching.DenseDriverThreshold)
@@ -43,7 +45,7 @@ func BuildCandidateSearcher(
 
 	budgetFactory := search.NewDefaultBudgetFactory(h3Service.MaxSearchRing())
 
-	h3Strategy := strategy.NewH3Strategy(h3Service, ringExpander, budgetFactory)
+	h3Strategy := strategy.NewH3Strategy(h3Service, ringExpander, budgetFactory, geoRefiner)
 	geoStrategy := strategy.NewGeoStrategy(geoService)
 
 	var candidateSearcher strategy.CandidateSearcher

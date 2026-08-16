@@ -5,6 +5,7 @@ import (
 
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/expansion"
+	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/refinement"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 )
@@ -13,17 +14,20 @@ type H3Strategy struct {
 	h3            *geo.H3Service
 	expander      *expansion.RingExpander
 	budgetFactory search.BudgetFactory
+	refiner       refinement.Refiner
 }
 
 func NewH3Strategy(
 	h3 *geo.H3Service,
 	expander *expansion.RingExpander,
 	budgetFactory search.BudgetFactory,
+	refiner refinement.Refiner,
 ) *H3Strategy {
 	return &H3Strategy{
 		h3:            h3,
 		expander:      expander,
 		budgetFactory: budgetFactory,
+		refiner:       refiner,
 	}
 }
 
@@ -63,7 +67,7 @@ func (s *H3Strategy) FindCandidates(
 		state.DriverIDs,
 	)
 
-	return search.Result{
+	result := search.Result{
 		Candidates: collection,
 
 		Backend: "h3",
@@ -73,5 +77,17 @@ func (s *H3Strategy) FindCandidates(
 		CellsVisited: state.CellsVisited,
 
 		RingsVisited: state.RingsVisited,
-	}, nil
+	}
+
+	return s.refiner.Refine(
+		ctx,
+		result,
+		search.Request{
+			PickupLat:       req.PickupLat,
+			PickupLng:       req.PickupLng,
+			RadiusKm:        req.RadiusKm,
+			CandidateLimit:  req.CandidateLimit,
+			MatchingAttempt: req.MatchingAttempt,
+		},
+	)
 }

@@ -137,19 +137,25 @@ func NewContainer() (*Container, error) {
 	// Candidate Discovery
 	// -----------------------------------------------------------------------------
 
+	geoRefiner := builders.BuildGeoRefiner(geoService)
+
 	candidateSearcher := builders.BuildCandidateSearcher(
 		cfg,
 		h3Service,
 		h3Index,
 		geoService,
 		densityProvider,
+		geoRefiner,
 	)
 
 	// -----------------------------------------------------------------------------
 	// Candidate Ranking
 	// -----------------------------------------------------------------------------
 
-	ranker := builders.BuildRanker(&cfg.Ranking)
+	ranker, err := builders.BuildRanker(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// -----------------------------------------------------------------------------
 	// Candidate Pipeline

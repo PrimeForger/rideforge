@@ -14,6 +14,7 @@ type RankingConfig struct {
 	RatingWeight       float64
 	ExperienceWeight   float64
 	FairnessWeight     float64
+	MaxETASeconds      float64
 }
 
 type RealtimeConfig struct {
@@ -62,6 +63,10 @@ type H3Config struct {
 	DriverCellTTLSeconds int
 }
 
+type RoutingConfig struct {
+	Provider string
+}
+
 type Config struct {
 	OfferBatchSize     int
 	MaxDriverAttempts  int
@@ -75,6 +80,7 @@ type Config struct {
 	Locking       LockingConfig
 	Observability ObservabilityConfig
 	H3            H3Config
+	Routing       RoutingConfig
 }
 
 func Load() *Config {
@@ -91,6 +97,7 @@ func Load() *Config {
 			RatingWeight:       getFloat("RATING_WEIGHT", 0.15),
 			ExperienceWeight:   getFloat("EXPERIENCE_WEIGHT", 0.10),
 			FairnessWeight:     getFloat("FAIRNESS_WEIGHT", 0.05),
+			MaxETASeconds:      getFloat("MAX_ETA_SECONDS", 1200.0),
 		},
 		Realtime: RealtimeConfig{
 			MaxLocationAccuracyMeters:        getFloat("MAX_LOCATION_ACCURACY_METERS", 100),
@@ -131,6 +138,9 @@ func Load() *Config {
 			Resolution:           getInt("H3_RESOLUTION", 8),
 			SearchRing:           getInt("H3_SEARCH_RING", 1),
 			DriverCellTTLSeconds: getInt("H3_DRIVER_CELL_TTL_SECONDS", 90),
+		},
+		Routing: RoutingConfig{
+			Provider: getString("ROUTING_PROVIDER", "none"),
 		},
 	}
 	cfg.normalizeWeights()

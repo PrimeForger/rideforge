@@ -6,15 +6,22 @@ import (
 )
 
 func BuildRanker(
-	cfg *config.RankingConfig,
-) ranking.Ranker {
+	cfg *config.Config,
+) (ranking.Ranker, error) {
 
-	featureExtractor := ranking.NewDefaultFeatureExtractor()
+	routingProvider, err := BuildRoutingProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
 
-	scorer := ranking.NewDefaultScorer(cfg)
+	travelCalc := ranking.NewDefaultTravelCalculator(routingProvider)
+
+	featureExtractor := ranking.NewDefaultFeatureExtractor(travelCalc)
+
+	scorer := ranking.NewDefaultScorer(&cfg.Ranking)
 
 	return ranking.NewDefaultRanker(
 		featureExtractor,
 		scorer,
-	)
+	), nil
 }

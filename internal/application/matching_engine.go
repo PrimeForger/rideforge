@@ -219,9 +219,15 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	// -----------------------------------------------------------------------------
 
 	dispatchDecision := e.retryPolicy.Decide(matching.RetryInput{
-		AttemptCount:        attemptCount,
+		AttemptCount: attemptCount,
+
 		NearbyDriverCount:   pipelineCtx.Result.LoadedCandidates,
 		EligibleDriverCount: pipelineCtx.Result.RankedCandidates,
+
+		PreviouslyOfferedCount:  attemptCount,
+		PreviouslyAcceptedCount: 0,
+		PreviouslyRejectedCount: 0,
+		PreviouslyTimedOutCount: 0,
 	})
 
 	e.logger.Info("adaptive retry decision selected",

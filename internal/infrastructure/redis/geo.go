@@ -140,3 +140,35 @@ func (g *GeoService) Distance(
 
 	return res
 }
+
+func (g *GeoService) NearestDrivers(
+	ctx context.Context,
+	lat float64,
+	lng float64,
+	radiusKm float64,
+	driverIDs []uuid.UUID,
+) ([]uuid.UUID, error) {
+	if len(driverIDs) == 0 {
+		return nil, nil
+	}
+
+	nearby, err := g.FindNearbyDriversWithDistance(ctx, lat, lng, radiusKm, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	allowedSet := make(map[uuid.UUID]struct{}, len(driverIDs))
+	for _, id := range driverIDs {
+		allowedSet[id] = struct{}{}
+	}
+
+	var result []uuid.UUID
+	for _, n := range nearby {
+		if _, ok := allowedSet[n.ID]; ok {
+			result = append(result, n.ID)
+		}
+	}
+
+	return result, nil
+}
+

@@ -2,22 +2,25 @@ package ranking
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/candidate/pipeline"
-	"github.com/ashadashraf/ride-hail-app/internal/shared/geo"
 )
 
 type DefaultFeatureExtractor struct {
-	enrichers []Enricher
+	travelCalc TravelCalculator
+	enrichers  []Enricher
 }
 
 func NewDefaultFeatureExtractor(
+	travelCalc TravelCalculator,
 	enrichers ...Enricher,
 ) *DefaultFeatureExtractor {
 
 	return &DefaultFeatureExtractor{
-		enrichers: enrichers,
+		travelCalc: travelCalc,
+		enrichers:  enrichers,
 	}
 }
 
@@ -27,20 +30,32 @@ func (e *DefaultFeatureExtractor) Extract(
 	c *candidate.Candidate,
 ) (Features, error) {
 
+	if pipelineCtx == nil {
+		return Features{}, errors.New("pipeline context is nil")
+	}
+
+	if c == nil {
+		return Features{}, errors.New("candidate is nil")
+	}
+
+	if c.Driver == nil {
+		return Features{}, errors.New("driver is nil")
+	}
+
 	d := c.Driver
 
-	distance := geo.HaversineDistanceKm(
+	travelFeatures, err := e.travelCalc.Calculate(
+		ctx,
 		pipelineCtx.PickupLat,
 		pipelineCtx.PickupLng,
-		d.Lat,
-		d.Lng,
+		d,
 	)
+	if err != nil {
+		return Features{}, err
+	}
 
 	features := Features{
-		Travel: TravelFeatures{
-			DistanceKm: distance,
-			ETASeconds: 0,
-		},
+		Travel: travelFeatures,
 
 		Quality: QualityFeatures{
 			AcceptanceRate:   d.AcceptanceRate,

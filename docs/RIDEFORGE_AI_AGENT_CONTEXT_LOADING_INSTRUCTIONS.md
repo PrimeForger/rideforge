@@ -713,14 +713,14 @@ Use this matrix to determine which documentation must be loaded.
 | Driver location | ADR-0009 + ADR-0010 + ADR-0022 + relevant AI/dispatch docs |
 | Kafka / Redpanda | ADR-0005 + ADR-0006 + ADR-0012 + ADR-0013 + ADR-0021 |
 | API | ADR-0014 + Development docs + relevant architecture |
-| Dispatch | ADR-0015 + ADR-0016 + ADR-0017 + ADR-0018 + relevant AI docs |
-| Smart Dispatch | ADR-0015 + ADR-0016 + ADR-0017 + ADR-0018 + full relevant AI docs |
-| Stand Dispatch | ADR-0015 + ADR-0018 + relevant domain/development docs |
+| Dispatch | `01-business/1.DISPATCH_BUSINESS_RULES.md` + `01-business/4.MATCHING_RULES.md` + ADR-0015 + ADR-0016 + ADR-0017 + ADR-0018 + ADR-0021 + ADR-0024 + relevant architecture/component/AI docs |
+| Smart Dispatch | Dispatch P0 set + `02-architecture/2.DISPATCH_ENGINE.md` + `02-architecture/3.DISCOVERY_ENGINE.md` + `02-architecture/4.CANDIDATE_PIPELINE.md` + `02-architecture/5.RANKING_ENGINE.md` + relevant AI docs |
+| Stand Dispatch / Smart Stand Dispatch | Dispatch P0 set + `03-components/1.DISPATCH_ENGINE.md` + `03-components/2.DISCOVERY_COMPONENTS.md` + `03-components/3.CANDIDATE_PIPELINE_COMPONENTS.md` + `03-components/4.RANKING_COMPONENTS.md` + `03-components/5.GEO_COMPONENTS.md` + relevant diagrams |
 | ETA | ADR-0017 + `05-ai/6.ETA_AND_PREDICTION_SYSTEM.md` |
 | AI | `05-ai/` + ADR-0016 + ADR-0026 |
 | ML | `05-ai/` + ADR-0026 + relevant development docs |
 | Security | ADR-0023 + ADR-0024 + deployment docs |
-| Configuration | ADR-0024 + development + deployment docs |
+| Configuration | ADR-0024 + `04-development/10.CONFIGURATION_AND_ENVIRONMENT.md` + relevant dispatch/business docs |
 | Testing | ADR-0025 + relevant architecture + development docs |
 | Deployment | ADR-0027 + ADR-0028 + development/deployment docs |
 | Cost | ADR-0028 + ADR-0027 + relevant infrastructure docs |
@@ -1372,6 +1372,87 @@ When a lower layer conflicts with a higher architectural constraint, investigate
 
 ---
 
+# 52A. Canonical Dispatch Strategy Context
+
+When a task involves dispatch, candidate discovery, ranking, driver location, AI-assisted dispatch, configuration, or dispatch-related architecture, treat the following model as authoritative across the documentation set:
+
+```text
+Two Primary Dispatch Strategies:
+
+1. Smart Stand Dispatch
+2. Smart Dispatch
+```
+
+AI-assisted dispatch is **not a third primary dispatch strategy**. It is an optimization capability that may operate within either primary strategy.
+
+```text
+Hierarchical Dispatch Configuration
+        ↓
+Effective Dispatch Strategy
+        ↓
+Candidate Discovery
+        ↓
+Hard Eligibility / Regional / Legal Validation
+        ↓
+Strategy-Specific Processing
+        ↓
+AI-Assisted Optimization where enabled
+        ↓
+Ranking / Selection
+        ↓
+Assignment
+```
+
+The agent must preserve these distinctions:
+
+```text
+Specific configuration overrides inherited configuration.
+
+Smart Stand Dispatch = stand-preferred, not stand-only.
+
+Smart Dispatch = stand-agnostic.
+
+Dispatch Strategy ≠ Candidate Discovery Scope.
+
+Not Preferred ≠ Ineligible.
+
+Candidate Expansion ≠ Strategy Switching.
+
+AI Failure ≠ Strategy Switching.
+
+Geographic Proximity ≠ Legal Permission.
+
+Candidate Discovery ≠ Legal Authorization.
+```
+
+For **Smart Stand Dispatch**:
+
+```text
+Rider inside configured stand radius
+        ↓
+Prefer eligible drivers from that stand
+        ↓
+Apply stand queue / ordering rules
+        ↓
+If suitable stand supply is unavailable
+        ↓
+Broaden candidate discovery
+```
+
+Broader candidates may include non-stand drivers, drivers at nearby stands, and drivers from nearby locations. If the rider is outside all configured stand radii, the candidate search must not become stand-only.
+
+For **Smart Dispatch**, stand membership does not create an inherent preference. Eligible drivers may be considered regardless of stand membership, subject to hard constraints.
+
+For **cross-location dispatch**, nearby locations may contribute candidates even when their configured strategy differs. A source location's strategy is context for strategy-specific prioritization; it is not automatically a hard candidate boundary.
+
+For **hierarchical configuration**, the agent must resolve from the most specific applicable level upward until an explicit strategy is found, then use the system default if none exists. The hierarchy may contain State, District, City/Town, Rural Area, Auto Stand, ride-level, and other intermediate levels. Do not hard-code a fixed hierarchy unless the current documentation explicitly requires it.
+
+For **AI**, the resolved primary strategy remains authoritative. AI cannot override hard eligibility, regional/legal restrictions, safety, availability, service compatibility, freshness, or configured stand queue semantics. If AI is unavailable, deterministic processing must preserve the same primary strategy unless an explicit business/configuration rule defines a strategy transition.
+
+For **documentation conflicts**, prefer the current accepted ADR and current canonical business/architecture documentation. If the conflict cannot be resolved, do not invent a rule; report the conflict and identify the documents involved.
+
+---
+
 # 53. Important RideForge Constraints
 
 Always remain aware of these architectural constraints when relevant:
@@ -1733,21 +1814,40 @@ P3 — Not Required
 For example:
 
 ```text
-Smart Dispatch
+Dispatch / Smart Dispatch / Smart Stand Dispatch
 
 P0:
+01-business/1.DISPATCH_BUSINESS_RULES.md
+01-business/4.MATCHING_RULES.md
 ADR-0015
 ADR-0016
+ADR-0018
+ADR-0021
+ADR-0024
+02-architecture/2.DISPATCH_ENGINE.md
+02-architecture/3.DISCOVERY_ENGINE.md
+02-architecture/4.CANDIDATE_PIPELINE.md
+02-architecture/5.RANKING_ENGINE.md
+03-components/1.DISPATCH_ENGINE.md
+03-components/2.DISCOVERY_COMPONENTS.md
+03-components/3.CANDIDATE_PIPELINE_COMPONENTS.md
+03-components/4.RANKING_COMPONENTS.md
+03-components/5.GEO_COMPONENTS.md
 05-ai/5.SMART_DISPATCH_AI.md
+05-ai/8.AI_MATCHING_AND_RANKING.md
+05-ai/21.AI_FAILURE_AND_FALLBACK_STRATEGY.md
+diagrams/04-DISPATCH_ARCHITECTURE.md
+diagrams/05-DRIVER_LOCATION_AND_GEOSPATIAL_FLOW.md
+diagrams/07-AI_AND_ML_ARCHITECTURE.md
 
 P1:
 ADR-0017
-ADR-0018
 ADR-0019
 ADR-0020
-ADR-0021
 ADR-0022
 ADR-0026
+04-development/10.CONFIGURATION_AND_ENVIRONMENT.md
+diagrams/10-DIAGRAM_INDEX.md
 
 P2:
 ADR-0028
@@ -1756,6 +1856,28 @@ General development documentation
 P3:
 Unrelated documentation
 ```
+
+---
+
+# 66A. Progressive Loading Rule for Dispatch Tasks
+
+Do not automatically load every dispatch-related document into the model context when a smaller set is sufficient.
+
+Use this progression:
+
+```text
+1. Load the P0 business + ADR + directly relevant architecture documents.
+2. Load the specific component/AI/diagram documents needed by the task.
+3. Load P1 supporting documents only when the task crosses those boundaries.
+4. Inspect source code after the documented behavior is understood.
+5. Load additional documents only when references, conflicts, or implementation details require them.
+```
+
+The goal is **complete relevant context, not maximum context**.
+
+For a simple implementation task, do not consume tokens on unrelated AI, deployment, security, or infrastructure documentation.
+
+For a cross-cutting dispatch architecture change, use the complete dispatch P0 set defined in the Context Relevance Levels section.
 
 ---
 
