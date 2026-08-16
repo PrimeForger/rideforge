@@ -28,6 +28,7 @@ type Container struct {
 	DriverLocationService        *application.DriverLocationService
 	DriverDeviceService          *application.DriverDeviceService
 	DriverMetricsService         *application.DriverMetricsService
+	H3RecoveryService            *application.H3RecoveryService
 	GeoService                   *redis.GeoService
 	DriverCache                  *redis.DriverCache
 
@@ -46,6 +47,7 @@ type Container struct {
 
 	RealtimeHub             *realtime.Hub
 	HeartbeatRecoveryWorker *realtime.HeartbeatRecoveryWorker
+	H3ReconciliationWorker  *application.H3ReconciliationWorker
 	Config                  *config.Config
 
 	Logger *zap.Logger
@@ -175,6 +177,7 @@ func NewContainer() (*Container, error) {
 	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
 	driverDeviceService := application.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
 	driverMetricsService := application.NewDriverMetricsService(txManager, metricsRepo, driverCache)
+	h3RecoveryService := application.NewH3RecoveryService(driverRepo, h3Service, h3Index, geoService, driverCache, log)
 	// idempotencyService := application.NewIdempotencyService(db)
 
 	// -- Handlers --
@@ -183,6 +186,12 @@ func NewContainer() (*Container, error) {
 
 	heartbeatRecoveryWorker := realtime.NewHeartbeatRecoveryWorker(
 		driverCache, driverService, time.Duration(cfg.Realtime.HeartbeatRecoveryIntervalSeconds)*time.Second, log,
+	)
+	h3ReconciliationWorker := application.NewH3ReconciliationWorker(
+		h3RecoveryService,
+		cfg.H3.ReconciliationEnabled,
+		time.Duration(cfg.H3.ReconciliationIntervalSeconds)*time.Second,
+		log,
 	)
 
 	eventRouter := application.NewEventRouter(
@@ -211,6 +220,7 @@ func NewContainer() (*Container, error) {
 		DriverLocationService:        driverLocationService,
 		DriverDeviceService:          driverDeviceService,
 		DriverMetricsService:         driverMetricsService,
+		H3RecoveryService:            h3RecoveryService,
 		GeoService:                   geoService,
 		DriverCache:                  driverCache,
 		OutboxRepo:                   outboxRepo,
@@ -225,6 +235,7 @@ func NewContainer() (*Container, error) {
 		DLQProducer:                  dlqProducer,
 		RealtimeHub:                  realtimeHub,
 		HeartbeatRecoveryWorker:      heartbeatRecoveryWorker,
+		H3ReconciliationWorker:       h3ReconciliationWorker,
 		Config:                       cfg,
 		Logger:                       log,
 	}, nil

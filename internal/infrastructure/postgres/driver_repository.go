@@ -20,7 +20,7 @@ func NewDriverRepository(db *sql.DB) *DriverRepository {
 
 func (d *DriverRepository) GetAvailableDrivers(ctx context.Context) ([]*driver.Driver, error) {
 
-	query := `SELECT id, status FROM drivers WHERE status = 'ONLINE'`
+	query := `SELECT id, status, lat, lng FROM drivers WHERE status = 'ONLINE'`
 
 	rows, err := d.db.QueryContext(ctx, query)
 	if err != nil {
@@ -34,7 +34,7 @@ func (d *DriverRepository) GetAvailableDrivers(ctx context.Context) ([]*driver.D
 		var dr driver.Driver
 		var status string
 
-		if err := rows.Scan(&dr.ID, &status); err != nil {
+		if err := rows.Scan(&dr.ID, &status, &dr.Lat, &dr.Lng); err != nil {
 			return nil, err
 		}
 
@@ -208,26 +208,30 @@ func (d *DriverRepository) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*dr
 func (d *DriverRepository) Save(ctx context.Context, dr *driver.Driver) error {
 
 	query := `
-	INSERT INTO drivers (id, status)
-	VALUES ($1, $2)
+	INSERT INTO drivers (id, status, lat, lng)
+	VALUES ($1, $2, $3, $4)
 	ON CONFLICT (id) DO UPDATE SET
-	status = EXCLUDED.status
+	status = EXCLUDED.status,
+	lat = EXCLUDED.lat,
+	lng = EXCLUDED.lng
 	`
 
-	_, err := d.db.ExecContext(ctx, query, dr.ID, string(dr.Status))
+	_, err := d.db.ExecContext(ctx, query, dr.ID, string(dr.Status), dr.Lat, dr.Lng)
 	return err
 }
 
 func (d *DriverRepository) SaveTx(ctx context.Context, tx *sql.Tx, dr *driver.Driver) error {
 
 	query := `
-	INSERT INTO drivers (id, status)
-	VALUES ($1, $2)
+	INSERT INTO drivers (id, status, lat, lng)
+	VALUES ($1, $2, $3, $4)
 	ON CONFLICT (id) DO UPDATE SET
-	status = EXCLUDED.status
+	status = EXCLUDED.status,
+	lat = EXCLUDED.lat,
+	lng = EXCLUDED.lng
 	`
 
-	_, err := tx.ExecContext(ctx, query, dr.ID, string(dr.Status))
+	_, err := tx.ExecContext(ctx, query, dr.ID, string(dr.Status), dr.Lat, dr.Lng)
 	return err
 }
 

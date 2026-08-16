@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis/scripts"
+	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
@@ -18,24 +19,16 @@ import (
 
 var h3Tracer = otel.Tracer("infra.h3")
 
-type DriverCellUpdateStatus int
+type DriverCellUpdateStatus = ports.DriverCellUpdateStatus
 
 const (
-	DriverCellUnchanged DriverCellUpdateStatus = iota
-	DriverCellMoved
-	DriverCellAdded
+	DriverCellUnchanged = ports.DriverCellUnchanged
+	DriverCellMoved     = ports.DriverCellMoved
+	DriverCellAdded     = ports.DriverCellAdded
 )
 
-type DriverCellUpdateResult struct {
-	Status  DriverCellUpdateStatus
-	OldCell string
-	NewCell string
-}
-
-type RemoveDriverResult struct {
-	Removed bool
-	OldCell string
-}
+type DriverCellUpdateResult = ports.CellUpdateResult
+type RemoveDriverResult = ports.DriverRemoveResult
 
 type H3DriverIndexOptions struct {
 	DriverCellTTL time.Duration

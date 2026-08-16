@@ -57,10 +57,12 @@ type ObservabilityConfig struct {
 }
 
 type H3Config struct {
-	Enabled              bool
-	Resolution           int
-	SearchRing           int
-	DriverCellTTLSeconds int
+	Enabled                       bool
+	Resolution                    int
+	SearchRing                    int
+	DriverCellTTLSeconds          int
+	ReconciliationEnabled         bool
+	ReconciliationIntervalSeconds int
 }
 
 type RoutingConfig struct {
@@ -134,10 +136,12 @@ func Load() *Config {
 			TracingEnabled: getBool("TRACING_ENABLED", true),
 		},
 		H3: H3Config{
-			Enabled:              getBool("H3_ENABLED", true),
-			Resolution:           getInt("H3_RESOLUTION", 8),
-			SearchRing:           getInt("H3_SEARCH_RING", 1),
-			DriverCellTTLSeconds: getInt("H3_DRIVER_CELL_TTL_SECONDS", 90),
+			Enabled:                       getBool("H3_ENABLED", true),
+			Resolution:                    getInt("H3_RESOLUTION", 8),
+			SearchRing:                    getInt("H3_SEARCH_RING", 1),
+			DriverCellTTLSeconds:          getInt("H3_DRIVER_CELL_TTL_SECONDS", 90),
+			ReconciliationEnabled:         getBool("H3_RECONCILIATION_ENABLED", true),
+			ReconciliationIntervalSeconds: getInt("H3_RECONCILIATION_INTERVAL_SECONDS", 300),
 		},
 		Routing: RoutingConfig{
 			Provider: getString("ROUTING_PROVIDER", "none"),
@@ -145,6 +149,7 @@ func Load() *Config {
 	}
 	cfg.normalizeWeights()
 	cfg.validateMatching()
+	cfg.validateH3()
 	return cfg
 }
 
@@ -174,6 +179,12 @@ func (c *Config) normalizeWeights() {
 func (cfg *Config) validateMatching() {
 	if cfg.Matching.SparseDriverThreshold >= cfg.Matching.DenseDriverThreshold {
 		panic("MATCHING_SPARSE_DRIVER_THRESHOLD must be less than MATCHING_DENSE_DRIVER_THRESHOLD")
+	}
+}
+
+func (cfg *Config) validateH3() {
+	if cfg.H3.ReconciliationIntervalSeconds <= 0 {
+		cfg.H3.ReconciliationIntervalSeconds = 300
 	}
 }
 
