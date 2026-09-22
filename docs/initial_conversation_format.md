@@ -2,13 +2,14 @@
 
 Before doing any implementation, analysis, modification, or recommendation for this project, first locate and read:
 
-`RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md`
+1. `docs/STATUS.md` (for active milestone, completed capabilities, blockers, and next tasks)
+2. `RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md` (authoritative context-loading contract)
 
-This file is the authoritative instruction for how you must build your understanding of the RideForge project.
+These files are the authoritative instruction for how you must build your understanding of the RideForge project.
 
 ## Your First Responsibility
 
-Read `RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md` completely and follow the instructions defined inside it.
+Read `docs/STATUS.md` and `RIDEFORGE_AI_AGENT_CONTEXT_LOADING_INSTRUCTIONS.md` completely and follow the instructions defined inside them.
 
 Do not start working on the actual task yet.
 
