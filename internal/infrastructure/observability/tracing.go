@@ -12,12 +12,22 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
+// NoopShutdown is a shutdown function that performs no operations and returns nil.
+func NoopShutdown(ctx context.Context) error {
+	return nil
+}
+
+// InitTracing initializes the OpenTelemetry tracer provider with an OTLP gRPC exporter.
+// If otlpEndpoint is empty, it sets up default propagation without an active exporter.
 func InitTracing(
 	ctx context.Context,
 	serviceName string,
 	environment string,
 	otlpEndpoint string,
 ) (func(context.Context) error, error) {
+	if otlpEndpoint == "" {
+		return NoopShutdown, nil
+	}
 
 	exporter, err := otlptracegrpc.New(
 		ctx,

@@ -6,6 +6,7 @@ import (
 	candidatedensity "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/density"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/profile"
 	"github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/search"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 )
 
 type DensityRule struct {
@@ -45,6 +46,7 @@ func (r *DensityRule) Apply(
 	}
 
 	density := r.classifier.Classify(driverCount)
+	observability.DispatchDensityClassificationsTotal.WithLabelValues(density.String()).Inc()
 
 	state.LastDensity = density
 

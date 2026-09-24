@@ -56,10 +56,14 @@ func main() {
 		}()
 	}
 
-	observability.Register()
+	if container.Config.Observability.MetricsEnabled {
+		observability.Register()
+	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	if container.Config.Observability.MetricsEnabled {
+		mux.Handle("/metrics", promhttp.Handler())
+	}
 
 	srv := server.NewServer(
 		container.RideService,
@@ -98,7 +102,7 @@ func main() {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(7)
 
 	go func() {
 		defer wg.Done()
@@ -152,6 +156,16 @@ func main() {
 	go func() {
 		defer wg.Done()
 		container.HeartbeatRecoveryWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		container.H3ReconciliationWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		container.DemandReconciliationWorker.Start(ctx)
 	}()
 
 	go func() {

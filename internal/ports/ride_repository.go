@@ -13,4 +13,5 @@ type RideRepository interface {
 	SaveTx(ctx context.Context, tx *sql.Tx, rideEntity *ride.Ride) error
 	GetByID(ctx context.Context, id uuid.UUID) (*ride.Ride, error)
 	GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*ride.Ride, error)
+	GetActiveRides(ctx context.Context) ([]*ride.Ride, error)
 }

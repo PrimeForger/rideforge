@@ -173,3 +173,52 @@ func (r *RideRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID
 
 	return &rideEntity, nil
 }
+
+func (r *RideRepository) GetActiveRides(ctx context.Context) ([]*ride.Ride, error) {
+	query := `
+	SELECT id, rider_id, driver_id, status, version, created_at, updated_at
+	FROM rides
+	WHERE status IN ('REQUESTED', 'MATCHING')
+	`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rides []*ride.Ride
+
+	for rows.Next() {
+		var rideEntity ride.Ride
+		var status string
+		var driverID sql.NullString
+
+		err := rows.Scan(
+			&rideEntity.ID,
+			&rideEntity.RiderID,
+			&driverID,
+			&status,
+			&rideEntity.Version,
+			&rideEntity.CreatedAt,
+			&rideEntity.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if driverID.Valid {
+			dID, _ := uuid.Parse(driverID.String)
+			rideEntity.DriverID = dID
+		}
+
+		rideEntity.Status = ride.Status(status)
+		rides = append(rides, &rideEntity)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return rides, nil
+}

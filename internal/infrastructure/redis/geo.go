@@ -171,4 +171,3 @@ func (g *GeoService) NearestDrivers(
 
 	return result, nil
 }
-

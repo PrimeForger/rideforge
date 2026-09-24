@@ -143,8 +143,11 @@ func (e *MatchingEngine) HandleMatchingStarted(
 	// load driver details or rank candidates.
 	// -----------------------------------------------------------------------------
 
+	lookupStart := time.Now()
+	lookupCtx, lookupSpan := matchingTracer.Start(ctx, "dispatch.candidate_lookup")
+
 	discoveryResult, err := e.candidateSearcher.FindCandidates(
-		ctx,
+		lookupCtx,
 		search.Request{
 			PickupLat: pickupLat,
 			PickupLng: pickupLng,
@@ -156,14 +159,28 @@ func (e *MatchingEngine) HandleMatchingStarted(
 			MatchingAttempt: attemptCount,
 		},
 	)
+	observability.DispatchCandidateLookupDurationSeconds.Observe(time.Since(lookupStart).Seconds())
 
 	if err != nil {
+		observability.CandidateRetrievalOutcomeTotal.WithLabelValues("error").Inc()
+		lookupSpan.SetAttributes(attribute.String("search.result", "error"))
+		lookupSpan.End()
+
 		e.logger.Error("candidate driver search failed",
 			zap.String("ride_id", rideID.String()),
 			zap.Error(err),
 		)
 		return fail("candidate_search_error", err)
 	}
+
+	discoveredCount := 0
+	if discoveryResult.Candidates != nil {
+		discoveredCount = discoveryResult.Candidates.Len()
+	}
+
+	observability.H3LookupCellsTotal.Observe(float64(discoveryResult.CellsVisited))
+	observability.H3SearchRingsVisited.Observe(float64(discoveryResult.RingsVisited))
+	observability.H3LookupResultsTotal.Observe(float64(discoveredCount))
 
 	// -----------------------------------------------------------------------------
 	// Phase 3: Execute the candidate pipeline.
@@ -188,19 +205,50 @@ func (e *MatchingEngine) HandleMatchingStarted(
 		initialDecision.CandidateLimit,
 	)
 
+	rankingStart := time.Now()
+	rankingCtx, rankingSpan := matchingTracer.Start(ctx, "dispatch.ranking")
+
 	err = e.candidatePipeline.Execute(
-		ctx,
+		rankingCtx,
 		pipelineCtx,
 		discoveryResult.Candidates,
 	)
+	rankingSpan.End()
+	observability.DispatchRankingDurationSeconds.Observe(time.Since(rankingStart).Seconds())
 
 	if err != nil {
+		observability.CandidateRetrievalOutcomeTotal.WithLabelValues("error").Inc()
+		lookupSpan.SetAttributes(attribute.String("search.result", "error"))
+		lookupSpan.End()
+
 		e.logger.Error("candidate pipeline execution failed",
 			zap.String("ride_id", rideID.String()),
 			zap.Error(err),
 		)
 		return fail("candidate_pipeline_error", err)
 	}
+
+	observability.CandidatePipelineCount.WithLabelValues("loaded").Observe(float64(pipelineCtx.Result.LoadedCandidates))
+	observability.CandidatePipelineCount.WithLabelValues("filtered").Observe(float64(pipelineCtx.Result.FilteredCandidates))
+	observability.CandidatePipelineCount.WithLabelValues("ranked").Observe(float64(pipelineCtx.Result.RankedCandidates))
+
+	retrievalOutcome := "found"
+	if pipelineCtx.Result.RankedCandidates == 0 {
+		retrievalOutcome = "empty"
+	}
+	observability.CandidateRetrievalOutcomeTotal.WithLabelValues(retrievalOutcome).Inc()
+
+	lookupSpan.SetAttributes(
+		attribute.String("search.backend", discoveryResult.Backend),
+		attribute.Int("search.rings_visited", discoveryResult.RingsVisited),
+		attribute.Int("search.cells_visited", discoveryResult.CellsVisited),
+		attribute.Int("candidates.discovered", discoveredCount),
+		attribute.Int("candidates.loaded", pipelineCtx.Result.LoadedCandidates),
+		attribute.Int("candidates.filtered", pipelineCtx.Result.FilteredCandidates),
+		attribute.Int("candidates.ranked", pipelineCtx.Result.RankedCandidates),
+		attribute.String("search.result", retrievalOutcome),
+	)
+	lookupSpan.End()
 
 	span.SetAttributes(
 		attribute.String("matching.discovery_backend", discoveryResult.Backend),
@@ -329,7 +377,19 @@ func (e *MatchingEngine) offerCandidate(
 	// Reserve the driver atomically.
 	// Another dispatcher may have already reserved this driver.
 
-	reserved, err := e.locker.Reserve(ctx, driverID, rideID)
+	resStart := time.Now()
+	resCtx, resSpan := matchingTracer.Start(ctx, "dispatch.reservation")
+	reserved, err := e.locker.Reserve(resCtx, driverID, rideID)
+	resSpan.End()
+
+	resResult := "success"
+	if err != nil {
+		resResult = "error"
+	} else if !reserved {
+		resResult = "skipped"
+	}
+	observability.DispatchReservationDurationSeconds.WithLabelValues(resResult).Observe(time.Since(resStart).Seconds())
+
 	if err != nil {
 		e.logger.Error("failed to reserve driver",
 			zap.String("ride_id", rideID.String()),

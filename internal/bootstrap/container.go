@@ -45,10 +45,16 @@ type Container struct {
 	MatchProducer *kafka.Producer
 	DLQProducer   *kafka.Producer
 
-	RealtimeHub             *realtime.Hub
-	HeartbeatRecoveryWorker *realtime.HeartbeatRecoveryWorker
-	H3ReconciliationWorker  *application.H3ReconciliationWorker
-	Config                  *config.Config
+	RealtimeHub                *realtime.Hub
+	HeartbeatRecoveryWorker    *realtime.HeartbeatRecoveryWorker
+	H3ReconciliationWorker     *application.H3ReconciliationWorker
+	DemandReconciliationWorker *application.DemandReconciliationWorker
+	DemandStore                ports.CellDemandStore
+	DemandService              *application.DemandService
+	DemandRecoveryService      *application.DemandRecoveryService
+	OccupancyStore             ports.CellOccupancyStore
+	OccupancyService           *application.OccupancyService
+	Config                     *config.Config
 
 	Logger *zap.Logger
 }
@@ -78,7 +84,6 @@ func NewContainer() (*Container, error) {
 
 	// -- Infra --
 	txManager := postgres.NewTxManager(db)
-	// driverLocker := postgres.NewDBDriverLocker(db)
 
 	// -- Geo --
 	h3Service := geo.NewH3Service(cfg.H3.Resolution, cfg.H3.SearchRing)
@@ -90,7 +95,6 @@ func NewContainer() (*Container, error) {
 	}
 
 	timeoutScheduler := redis.NewTimeoutScheduler(redisClient.GetRaw(), txManager, outboxRepo)
-	// eventBus := redisbus.NewEventBus("localhost:6379", "ride-events")
 	geoService := redis.NewGeoService(redisClient)
 	driverCache := redis.NewDriverCache(redisClient, redis.DriverCacheOptions{
 		LocationSeqTTLSeconds: cfg.Realtime.LocationSeqTTLSeconds,
@@ -112,6 +116,21 @@ func NewContainer() (*Container, error) {
 		},
 	)
 	densityProvider := redis.NewH3DensityProvider(redisClient, h3Service)
+	demandStore := redis.NewRedisDemandStore(
+		redisClient,
+		redis.DemandStoreOptions{
+			DemandTTL: time.Duration(cfg.Demand.DemandTTLSeconds) * time.Second,
+		},
+	)
+	occupancyStore := redis.NewRedisOccupancyStore(
+		redisClient,
+		redis.OccupancyStoreOptions{
+			WarmImbalanceThreshold: cfg.Occupancy.WarmImbalanceThreshold,
+			HotImbalanceThreshold:  cfg.Occupancy.HotImbalanceThreshold,
+			MinDemandForHot:        cfg.Occupancy.MinDemandForHot,
+			DemandTTL:              time.Duration(cfg.Demand.DemandTTLSeconds) * time.Second,
+		},
+	)
 
 	// -- Kafka Produers ---
 	rideProducer := kafka.NewProducer([]string{"localhost:9092"}, "ride.events")
@@ -129,7 +148,6 @@ func NewContainer() (*Container, error) {
 	)
 
 	// --- Application Utilities (Ranking Engine) ---
-	// rankingEngine := matching.NewRankingEngine(&cfg.Ranking)
 	retryPolicy := matching.NewRetryPolicy(cfg.MatchingRetry)
 
 	// --- Application Services ---
@@ -178,7 +196,11 @@ func NewContainer() (*Container, error) {
 	driverDeviceService := application.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
 	driverMetricsService := application.NewDriverMetricsService(txManager, metricsRepo, driverCache)
 	h3RecoveryService := application.NewH3RecoveryService(driverRepo, h3Service, h3Index, geoService, driverCache, log)
-	// idempotencyService := application.NewIdempotencyService(db)
+
+	demandService := application.NewDemandService(demandStore, h3Service, log)
+	demandRecoveryService := application.NewDemandRecoveryService(rideRepo, h3Service, demandStore, log)
+
+	occupancyService := application.NewOccupancyService(occupancyStore, h3Service, log)
 
 	// -- Handlers --
 	rideEventHandler := matching.NewRideEventHandler(timeoutScheduler)
@@ -191,6 +213,12 @@ func NewContainer() (*Container, error) {
 		h3RecoveryService,
 		cfg.H3.ReconciliationEnabled,
 		time.Duration(cfg.H3.ReconciliationIntervalSeconds)*time.Second,
+		log,
+	)
+	demandReconciliationWorker := application.NewDemandReconciliationWorker(
+		demandRecoveryService,
+		cfg.Demand.ReconciliationEnabled,
+		time.Duration(cfg.Demand.ReconciliationIntervalSeconds)*time.Second,
 		log,
 	)
 
@@ -206,6 +234,7 @@ func NewContainer() (*Container, error) {
 		geoService,
 		driverCache,
 		h3Index,
+		demandService,
 		driverLocker,
 		log,
 	)
@@ -236,6 +265,12 @@ func NewContainer() (*Container, error) {
 		RealtimeHub:                  realtimeHub,
 		HeartbeatRecoveryWorker:      heartbeatRecoveryWorker,
 		H3ReconciliationWorker:       h3ReconciliationWorker,
+		DemandReconciliationWorker:   demandReconciliationWorker,
+		DemandStore:                  demandStore,
+		DemandService:                demandService,
+		DemandRecoveryService:        demandRecoveryService,
+		OccupancyStore:               occupancyStore,
+		OccupancyService:             occupancyService,
 		Config:                       cfg,
 		Logger:                       log,
 	}, nil

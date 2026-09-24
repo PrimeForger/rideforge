@@ -54,6 +54,7 @@ type ObservabilityConfig struct {
 	Environment    string
 	OTLPEndpoint   string
 	TracingEnabled bool
+	MetricsEnabled bool
 }
 
 type H3Config struct {
@@ -69,6 +70,18 @@ type RoutingConfig struct {
 	Provider string
 }
 
+type DemandConfig struct {
+	DemandTTLSeconds              int
+	ReconciliationEnabled         bool
+	ReconciliationIntervalSeconds int
+}
+
+type OccupancyConfig struct {
+	WarmImbalanceThreshold float64
+	HotImbalanceThreshold  float64
+	MinDemandForHot        int
+}
+
 type Config struct {
 	OfferBatchSize     int
 	MaxDriverAttempts  int
@@ -82,6 +95,8 @@ type Config struct {
 	Locking       LockingConfig
 	Observability ObservabilityConfig
 	H3            H3Config
+	Demand        DemandConfig
+	Occupancy     OccupancyConfig
 	Routing       RoutingConfig
 }
 
@@ -134,6 +149,7 @@ func Load() *Config {
 			Environment:    getString("ENVIRONMENT", "local"),
 			OTLPEndpoint:   getString("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 			TracingEnabled: getBool("TRACING_ENABLED", true),
+			MetricsEnabled: getBool("METRICS_ENABLED", true),
 		},
 		H3: H3Config{
 			Enabled:                       getBool("H3_ENABLED", true),
@@ -143,10 +159,21 @@ func Load() *Config {
 			ReconciliationEnabled:         getBool("H3_RECONCILIATION_ENABLED", true),
 			ReconciliationIntervalSeconds: getInt("H3_RECONCILIATION_INTERVAL_SECONDS", 300),
 		},
+		Demand: DemandConfig{
+			DemandTTLSeconds:              getInt("DEMAND_TTL_SECONDS", 1800),
+			ReconciliationEnabled:         getBool("DEMAND_RECONCILIATION_ENABLED", true),
+			ReconciliationIntervalSeconds: getInt("DEMAND_RECONCILIATION_INTERVAL_SECONDS", 300),
+		},
+		Occupancy: OccupancyConfig{
+			WarmImbalanceThreshold: getFloat("OCCUPANCY_WARM_IMBALANCE_THRESHOLD", 1.2),
+			HotImbalanceThreshold:  getFloat("OCCUPANCY_HOT_IMBALANCE_THRESHOLD", 1.5),
+			MinDemandForHot:        getInt("OCCUPANCY_MIN_DEMAND_FOR_HOT", 2),
+		},
 		Routing: RoutingConfig{
 			Provider: getString("ROUTING_PROVIDER", "none"),
 		},
 	}
+
 	cfg.normalizeWeights()
 	cfg.validateMatching()
 	cfg.validateH3()

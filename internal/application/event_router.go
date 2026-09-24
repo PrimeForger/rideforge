@@ -29,10 +29,11 @@ type EventRouter struct {
 	driverResponseService *DriverResponseService
 	driverMetricsService  *DriverMetricsService
 
-	geoService   *redis.GeoService
-	driverCache  *redis.DriverCache
-	h3Index      *redis.H3DriverIndex
-	driverLocker interface {
+	geoService    *redis.GeoService
+	driverCache   *redis.DriverCache
+	h3Index       *redis.H3DriverIndex
+	demandService *DemandService
+	driverLocker  interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	}
 
@@ -51,6 +52,7 @@ func NewEventRouter(
 	geoService *redis.GeoService,
 	driverCache *redis.DriverCache,
 	h3Index *redis.H3DriverIndex,
+	demandService *DemandService,
 	driverLocker interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	},
@@ -68,6 +70,7 @@ func NewEventRouter(
 		geoService:            geoService,
 		driverCache:           driverCache,
 		h3Index:               h3Index,
+		demandService:         demandService,
 		driverLocker:          driverLocker,
 		logger:                logger,
 	}
@@ -344,6 +347,26 @@ func (r *EventRouter) dispatchSideEffect(
 	envelope appevents.Envelope,
 ) error {
 	switch envelope.Type {
+	case "ride.requested":
+		var data struct {
+			RideID string  `json:"ride_id"`
+			Lat    float64 `json:"lat"`
+			Lng    float64 `json:"lng"`
+		}
+		if err := decodeEventData(envelope, &data); err != nil {
+			return err
+		}
+
+		rideID, err := parseUUID(data.RideID, "ride_id")
+		if err != nil {
+			return err
+		}
+
+		if r.demandService != nil {
+			_ = r.demandService.HandleRideRequested(ctx, rideID, data.Lat, data.Lng, envelope.Occurred)
+		}
+		return nil
+
 	case "ride.accepted":
 		var data struct {
 			RideID string `json:"ride_id"`
@@ -355,6 +378,10 @@ func (r *EventRouter) dispatchSideEffect(
 		rideID, err := parseUUID(data.RideID, "ride_id")
 		if err != nil {
 			return err
+		}
+
+		if r.demandService != nil {
+			_ = r.demandService.HandleDriverAccepted(ctx, rideID)
 		}
 
 		return r.rideEventHandler.HandleRideAccepted(ctx, rideID)

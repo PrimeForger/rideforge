@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
@@ -39,8 +40,14 @@ func (g *DriverOfferGateway) SendOffer(
 	rideID uuid.UUID,
 	driverID uuid.UUID,
 ) error {
-	ctx, span := driverOfferGatewayTracer.Start(ctx, "DriverOfferGateway.SendOffer")
-	defer span.End()
+	start := time.Now()
+	deliveryStatus := "unknown"
+
+	ctx, span := driverOfferGatewayTracer.Start(ctx, "dispatch.offer")
+	defer func() {
+		observability.DispatchOfferDurationSeconds.WithLabelValues(deliveryStatus).Observe(time.Since(start).Seconds())
+		span.End()
+	}()
 
 	span.SetAttributes(
 		attribute.String("ride.id", rideID.String()),
@@ -67,6 +74,7 @@ func (g *DriverOfferGateway) SendOffer(
 		})
 
 		if ok {
+			deliveryStatus = "delivered_ws"
 			observability.DriverOffersTotal.WithLabelValues("delivered_ws").Inc()
 
 			_ = g.driverCache.MarkOfferDeliveryStatus(
@@ -86,6 +94,7 @@ func (g *DriverOfferGateway) SendOffer(
 			return nil
 		}
 
+		deliveryStatus = "ws_failed"
 		observability.DriverOffersTotal.WithLabelValues("ws_failed").Inc()
 
 		_ = g.driverCache.MarkOfferDeliveryStatus(
@@ -104,6 +113,7 @@ func (g *DriverOfferGateway) SendOffer(
 	}
 
 	if err := g.push.SendRideOffer(ctx, rideID, driverID); err != nil {
+		deliveryStatus = "push_failed"
 		observability.DriverOffersTotal.WithLabelValues("push_failed").Inc()
 
 		_ = g.driverCache.MarkOfferDeliveryStatus(
@@ -126,6 +136,7 @@ func (g *DriverOfferGateway) SendOffer(
 		return nil
 	}
 
+	deliveryStatus = "delivered_push"
 	observability.DriverOffersTotal.WithLabelValues("delivered_push").Inc()
 
 	_ = g.driverCache.MarkOfferDeliveryStatus(

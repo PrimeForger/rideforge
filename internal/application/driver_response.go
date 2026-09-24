@@ -11,6 +11,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -51,8 +52,14 @@ func (s *DriverResponseService) HandleDriverAccepted(
 	rideID uuid.UUID,
 	driverID uuid.UUID,
 ) error {
-	ctx, span := driverResponseTracer.Start(ctx, "DriverResponseService.HandleDriverAccepted")
-	defer span.End()
+	start := time.Now()
+	accResult := "accepted"
+
+	ctx, span := driverResponseTracer.Start(ctx, "dispatch.acceptance")
+	defer func() {
+		observability.DispatchAcceptanceDurationSeconds.WithLabelValues(accResult).Observe(time.Since(start).Seconds())
+		span.End()
+	}()
 
 	span.SetAttributes(
 		attribute.String("ride.id", rideID.String()),
@@ -60,6 +67,7 @@ func (s *DriverResponseService) HandleDriverAccepted(
 	)
 
 	fail := func(err error, status string) error {
+		accResult = "error"
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("driver_response.result", status))
 		span.SetStatus(codes.Error, status)
@@ -205,8 +213,14 @@ func (s *DriverResponseService) HandleDriverRejected(
 	rideID uuid.UUID,
 	driverID uuid.UUID,
 ) error {
-	ctx, span := driverResponseTracer.Start(ctx, "DriverResponseService.HandleDriverRejected")
-	defer span.End()
+	start := time.Now()
+	accResult := "rejected"
+
+	ctx, span := driverResponseTracer.Start(ctx, "dispatch.acceptance")
+	defer func() {
+		observability.DispatchAcceptanceDurationSeconds.WithLabelValues(accResult).Observe(time.Since(start).Seconds())
+		span.End()
+	}()
 
 	span.SetAttributes(
 		attribute.String("ride.id", rideID.String()),
@@ -214,6 +228,7 @@ func (s *DriverResponseService) HandleDriverRejected(
 	)
 
 	fail := func(err error, status string) error {
+		accResult = "error"
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("driver_response.result", status))
 		span.SetStatus(codes.Error, status)
@@ -235,6 +250,7 @@ func (s *DriverResponseService) HandleDriverRejected(
 
 	// If already accepted by another driver → ignore
 	if r.Status == ride.StatusAccepted {
+		accResult = "already_accepted"
 		span.SetAttributes(attribute.String("driver_response.result", "already_accepted"))
 		span.SetStatus(codes.Ok, "already accepted")
 
@@ -292,8 +308,14 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	offerAcked bool,
 	deliveryStatus string,
 ) error {
-	ctx, span := driverResponseTracer.Start(ctx, "DriverResponseService.HandleDriverTimeout")
-	defer span.End()
+	start := time.Now()
+	accResult := "timeout"
+
+	ctx, span := driverResponseTracer.Start(ctx, "dispatch.acceptance")
+	defer func() {
+		observability.DispatchAcceptanceDurationSeconds.WithLabelValues(accResult).Observe(time.Since(start).Seconds())
+		span.End()
+	}()
 
 	span.SetAttributes(
 		attribute.String("ride.id", rideID.String()),
@@ -303,6 +325,7 @@ func (s *DriverResponseService) HandleDriverTimeout(
 	)
 
 	fail := func(err error, status string) error {
+		accResult = "error"
 		span.RecordError(err)
 		span.SetAttributes(attribute.String("driver_response.result", status))
 		span.SetStatus(codes.Error, status)

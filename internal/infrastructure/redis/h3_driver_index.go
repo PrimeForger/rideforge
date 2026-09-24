@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis/scripts"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
@@ -115,34 +116,21 @@ func (i *H3DriverIndex) UpdateDriverCell(
 
 	case scripts.DriverCellScriptAdded:
 		updateResult.Status = DriverCellAdded
-
-		span.SetAttributes(
-			attribute.String("h3.update_status", "added"),
-		)
-
+		observability.H3CellUpdatesTotal.WithLabelValues("added").Inc()
+		span.SetAttributes(attribute.String("h3.update_status", "added"))
 	case scripts.DriverCellScriptMoved:
 		updateResult.Status = DriverCellMoved
-
-		span.SetAttributes(
-			attribute.String("h3.update_status", "moved"),
-		)
-
+		observability.H3CellUpdatesTotal.WithLabelValues("moved").Inc()
+		span.SetAttributes(attribute.String("h3.update_status", "moved"))
 	case scripts.DriverCellScriptUnchanged:
 		updateResult.Status = DriverCellUnchanged
-
-		span.SetAttributes(
-			attribute.String("h3.update_status", "unchanged"),
-		)
-
+		observability.H3CellUpdatesTotal.WithLabelValues("unchanged").Inc()
+		span.SetAttributes(attribute.String("h3.update_status", "unchanged"))
 	default:
-		err := fmt.Errorf(
-			"unknown driver cell update status: %d",
-			result.Status,
-		)
-
+		err := fmt.Errorf("unknown driver cell update status: %d", result.Status)
+		observability.H3CellUpdatesTotal.WithLabelValues("error").Inc()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "unknown_update_status")
-
 		return DriverCellUpdateResult{}, err
 	}
 
@@ -176,6 +164,7 @@ func (i *H3DriverIndex) RemoveDriver(
 	).Result()
 
 	if err != nil {
+		observability.H3DriverRemovalsTotal.WithLabelValues("error").Inc()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "remove_driver_cell_failed")
 		return RemoveDriverResult{}, err
@@ -183,6 +172,7 @@ func (i *H3DriverIndex) RemoveDriver(
 
 	result, err := scripts.DecodeRemoveDriverCellScriptResult(raw)
 	if err != nil {
+		observability.H3DriverRemovalsTotal.WithLabelValues("error").Inc()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "decode_remove_driver_cell_result_failed")
 		return RemoveDriverResult{}, err
@@ -191,6 +181,12 @@ func (i *H3DriverIndex) RemoveDriver(
 	removeResult := RemoveDriverResult{
 		Removed: result.Status == scripts.DriverCellRemoved,
 		OldCell: result.Cell,
+	}
+
+	if removeResult.Removed {
+		observability.H3DriverRemovalsTotal.WithLabelValues("success").Inc()
+	} else {
+		observability.H3DriverRemovalsTotal.WithLabelValues("not_found").Inc()
 	}
 
 	if result.Cell != "" {
