@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Check if any Go source files are staged without their module README
+staged_files=$(git diff --cached --name-only)
+modules_touched=$(echo "$staged_files" | grep -E '\.go$' | while read -r line; do dirname "$line"; done | sort -u)
+
+missing_readmes=""
+for mod in $modules_touched; do
+  if [ "$mod" = "." ] || [ -z "$mod" ]; then continue; fi
+  readme="$mod/README.md"
+  if ! echo "$staged_files" | grep -qx "$readme"; then
+    missing_readmes="$missing_readmes\n  $readme (module: $mod)"
+  fi
+done
+
+if [ -n "$missing_readmes" ]; then
+  echo "❌ Commit rejected: The following module READMEs must be updated alongside code changes:"
+  echo -e "$missing_readmes"
+  echo "To bypass (emergency only): git commit --no-verify"
+  exit 1
+fi

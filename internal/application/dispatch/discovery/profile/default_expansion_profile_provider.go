@@ -3,58 +3,28 @@ package profile
 import candidatedensity "github.com/ashadashraf/ride-hail-app/internal/application/dispatch/discovery/density"
 
 type DefaultExpansionProfileProvider struct {
-	maxRing int
+	cfg ExpansionConfig
 }
 
 func NewDefaultExpansionProfileProvider(
-	maxRing int,
+	cfg ExpansionConfig,
 ) *DefaultExpansionProfileProvider {
-
 	return &DefaultExpansionProfileProvider{
-		maxRing: maxRing,
+		cfg: cfg,
 	}
 }
 
 func (p *DefaultExpansionProfileProvider) Profile(
 	density candidatedensity.DensityClass,
 ) ExpansionProfile {
-
 	switch density {
-
 	case candidatedensity.DensitySparse:
-
-		return ExpansionProfile{
-			RingStep:      2,
-			MaxRing:       p.maxRing,
-			MaxCells:      150,
-			MaxCandidates: 150,
-		}
-
+		return p.cfg.Sparse
 	case candidatedensity.DensityNormal:
-
-		return ExpansionProfile{
-			RingStep:      1,
-			MaxRing:       p.maxRing,
-			MaxCells:      80,
-			MaxCandidates: 80,
-		}
-
+		return p.cfg.Normal
 	case candidatedensity.DensityDense:
-
-		return ExpansionProfile{
-			RingStep:      1,
-			MaxRing:       1,
-			MaxCells:      30,
-			MaxCandidates: 30,
-		}
-
+		return p.cfg.Dense
 	default:
-
-		return ExpansionProfile{
-			RingStep:      1,
-			MaxRing:       p.maxRing,
-			MaxCells:      60,
-			MaxCandidates: 60,
-		}
+		return p.cfg.Default
 	}
 }

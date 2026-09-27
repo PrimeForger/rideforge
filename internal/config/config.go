@@ -82,6 +82,25 @@ type OccupancyConfig struct {
 	MinDemandForHot        int
 }
 
+type ExpansionProfileConfig struct {
+	SparseRingStep      int
+	SparseMaxCells      int
+	SparseMaxCandidates int
+
+	NormalRingStep      int
+	NormalMaxCells      int
+	NormalMaxCandidates int
+
+	DenseRingStep       int
+	DenseMaxRing        int
+	DenseMaxCells       int
+	DenseMaxCandidates  int
+
+	DefaultRingStep     int
+	DefaultMaxCells     int
+	DefaultMaxCandidates int
+}
+
 type Config struct {
 	OfferBatchSize     int
 	MaxDriverAttempts  int
@@ -98,6 +117,7 @@ type Config struct {
 	Demand        DemandConfig
 	Occupancy     OccupancyConfig
 	Routing       RoutingConfig
+	Expansion     ExpansionProfileConfig
 }
 
 func Load() *Config {
@@ -171,6 +191,21 @@ func Load() *Config {
 		},
 		Routing: RoutingConfig{
 			Provider: getString("ROUTING_PROVIDER", "none"),
+		},
+		Expansion: ExpansionProfileConfig{
+			SparseRingStep:       getInt("EXPANSION_SPARSE_RING_STEP", 2),
+			SparseMaxCells:       getInt("EXPANSION_SPARSE_MAX_CELLS", 150),
+			SparseMaxCandidates:  getInt("EXPANSION_SPARSE_MAX_CANDIDATES", 150),
+			NormalRingStep:       getInt("EXPANSION_NORMAL_RING_STEP", 1),
+			NormalMaxCells:       getInt("EXPANSION_NORMAL_MAX_CELLS", 80),
+			NormalMaxCandidates:  getInt("EXPANSION_NORMAL_MAX_CANDIDATES", 80),
+			DenseRingStep:        getInt("EXPANSION_DENSE_RING_STEP", 1),
+			DenseMaxRing:         getInt("EXPANSION_DENSE_MAX_RING", 1),
+			DenseMaxCells:        getInt("EXPANSION_DENSE_MAX_CELLS", 30),
+			DenseMaxCandidates:   getInt("EXPANSION_DENSE_MAX_CANDIDATES", 30),
+			DefaultRingStep:      getInt("EXPANSION_DEFAULT_RING_STEP", 1),
+			DefaultMaxCells:      getInt("EXPANSION_DEFAULT_MAX_CELLS", 60),
+			DefaultMaxCandidates: getInt("EXPANSION_DEFAULT_MAX_CANDIDATES", 60),
 		},
 	}
 

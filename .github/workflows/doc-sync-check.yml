@@ -1,0 +1,51 @@
+name: Module README Sync Check
+
+on:
+  push:
+    branches: [ main, staging ]
+  pull_request:
+    branches: [ main, staging ]
+
+jobs:
+  check-readme-sync:
+    name: Verify Module READMEs Updated
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for Unsynced Go Modules
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="origin/${{ github.base_ref }}"
+            CHANGED_FILES=$(git diff --name-only "$BASE_REF"...HEAD)
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
+          fi
+
+          echo "Changed files in commit/PR:"
+          echo "$CHANGED_FILES"
+
+          MODULES_TOUCHED=$(echo "$CHANGED_FILES" | grep -E '\.go$' | while read -r line; do dirname "$line"; done | sort -u)
+
+          MISSING_READMES=""
+          for MOD in $MODULES_TOUCHED; do
+            if [ "$MOD" = "." ] || [ -z "$MOD" ]; then
+              continue
+            fi
+            README="$MOD/README.md"
+            if ! echo "$CHANGED_FILES" | grep -qx "$README"; then
+              MISSING_READMES="${MISSING_READMES}\n  - $README (module: $MOD)"
+            fi
+          done
+
+          if [ -n "$MISSING_READMES" ]; then
+            echo "::error::Commit rejected by doc-sync-check! The following module READMEs must be updated alongside code changes:"
+            echo -e "$MISSING_READMES"
+            exit 1
+          fi
+
+          echo "✅ All modified Go modules have corresponding README.md updates."

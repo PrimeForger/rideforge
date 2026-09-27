@@ -1,7 +1,7 @@
 # RideForge — Living System Status
 
 > **Document Type:** Living Operational Status & Next Tasks  
-> **Last Updated:** 2026-09-23  
+> **Last Updated:** 2026-09-27  
 > **Rule for AI Agents:** Read this file first when starting a session to orient on current state. Only mark tasks "Done" after automated tests/builds pass. Never append past session history here (use `docs/sessions/YYYY-MM-DD.md` for session archives).
 
 ---
@@ -21,6 +21,7 @@
 * [x] **Hexagonal Architecture Foundation:** Clear separation across `domain`, `application`, `ports`, and `infrastructure`.
 * [x] **Documentation System Consolidation:** Complete docs audit, unified testing guidelines (`4.TESTING_GUIDELINES.md`), consolidated candidate pipeline architecture (`4.CANDIDATE_PIPELINE.md`), and sharpened business/matching rule boundaries.
 * [x] **Agent Harness Tooling:** Selective integration of ECC Go patterns, testing workflows, and Antigravity customization rules in `.agents/`.
+* [x] **Module README & Enforcement Architecture:** Generated code-grounded README.md files across all 46 Go packages with 7-section templates and human-approval guards; mechanically enforced via `.agents/rules/module-readme-sync.md`, `/doc-sync-check` workflow, `.git/hooks/pre-commit`, and GitHub Actions CI.
 
 ---
 

@@ -26,7 +26,32 @@ func BuildCandidateSearcher(
 
 	densityClassifier := density.NewDensityClassifier(cfg.Matching.SparseDriverThreshold, cfg.Matching.DenseDriverThreshold)
 
-	expansionProfileProvider := profile.NewDefaultExpansionProfileProvider(h3Service.MaxSearchRing())
+	expansionProfileProvider := profile.NewDefaultExpansionProfileProvider(profile.ExpansionConfig{
+		Sparse: profile.ExpansionProfile{
+			RingStep:      cfg.Expansion.SparseRingStep,
+			MaxRing:       h3Service.MaxSearchRing(),
+			MaxCells:      cfg.Expansion.SparseMaxCells,
+			MaxCandidates: cfg.Expansion.SparseMaxCandidates,
+		},
+		Normal: profile.ExpansionProfile{
+			RingStep:      cfg.Expansion.NormalRingStep,
+			MaxRing:       h3Service.MaxSearchRing(),
+			MaxCells:      cfg.Expansion.NormalMaxCells,
+			MaxCandidates: cfg.Expansion.NormalMaxCandidates,
+		},
+		Dense: profile.ExpansionProfile{
+			RingStep:      cfg.Expansion.DenseRingStep,
+			MaxRing:       cfg.Expansion.DenseMaxRing,
+			MaxCells:      cfg.Expansion.DenseMaxCells,
+			MaxCandidates: cfg.Expansion.DenseMaxCandidates,
+		},
+		Default: profile.ExpansionProfile{
+			RingStep:      cfg.Expansion.DefaultRingStep,
+			MaxRing:       h3Service.MaxSearchRing(),
+			MaxCells:      cfg.Expansion.DefaultMaxCells,
+			MaxCandidates: cfg.Expansion.DefaultMaxCandidates,
+		},
+	})
 
 	densityRule := policy.NewDensityRule(densityProvider, densityClassifier, expansionProfileProvider)
 
