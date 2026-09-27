@@ -35,7 +35,7 @@
 
 ## 4. Active Blockers & Known Issues
 
-* [ ] **Windows CGO / MinGW Linker Warning:** Older MinGW GCC (`ld.exe`) on the host throws `unrecognized option '--high-entropy-va'` when compiling tests with CGO enabled. Native pure-Go packages test clean; CGO-dependent packages (`uber/h3-go`) require an updated GCC toolchain or `CGO_ENABLED=0` for pure Go packages.
+* [x] **Windows CGO / MinGW Linker Resolution:** Older MinGW GCC (`ld.exe`) on the host throws `unrecognized option '--high-entropy-va'` when invoking external linking. Resolved for binaries by building with `-ldflags="-linkmode=internal"`, allowing `cmd/api` to compile and link cleanly. Pure-Go packages test with `CGO_ENABLED=0`.
 
 ---
 
