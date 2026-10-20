@@ -15,17 +15,30 @@ func NewProcessedEventRepository(db *sql.DB) *ProcessedEventRepository {
 	return &ProcessedEventRepository{db: db}
 }
 
+func (r *ProcessedEventRepository) IsProcessed(
+	ctx context.Context,
+	eventID uuid.UUID,
+	consumer string,
+) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx,
+		processedEventIsProcessed,
+		eventID,
+		consumer,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (r *ProcessedEventRepository) InsertIfNotExists(
 	ctx context.Context,
 	eventID uuid.UUID,
 	consumer string,
 ) (bool, error) {
 
-	query := `
-	INSERT INTO processed_events (event_id, consumer_name)
-	VALUES ($1, $2)
-	ON CONFLICT DO NOTHING
-	`
+	query := processedEventInsertIfNotExists
 
 	res, err := r.db.ExecContext(ctx, query, eventID, consumer)
 	if err != nil {
@@ -48,11 +61,7 @@ func (r *ProcessedEventRepository) InsertIfNotExistsTx(
 	consumer string,
 ) (bool, error) {
 
-	query := `
-	INSERT INTO processed_events (event_id, consumer_name)
-	VALUES ($1, $2)
-	ON CONFLICT DO NOTHING
-	`
+	query := processedEventInsertIfNotExists
 
 	res, err := tx.ExecContext(ctx, query, eventID, consumer)
 	if err != nil {

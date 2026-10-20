@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/occupancy"
@@ -106,14 +107,22 @@ func (s *RedisOccupancyStore) GetMultiCellSupply(
 	for i, cellID := range cellIDs {
 		count, err := cmds[i].Result()
 		if err != nil {
-			result[cellID] = 0
-			continue
+			observability.RedisOperationsTotal.WithLabelValues("pipeline_supply", "error").Inc()
+			return nil, fmt.Errorf("read supply for cell %s: %w", cellID, err)
 		}
 		result[cellID] = int(count)
 	}
 
 	span.SetStatus(codes.Ok, "multi_cell_supply_retrieved")
 	return result, nil
+}
+
+func (s *RedisOccupancyStore) ListDemandCells(ctx context.Context) ([]string, error) {
+	cells, err := s.client.GetRaw().SMembers(ctx, demandCellRegistryKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	return cells, nil
 }
 
 func (s *RedisOccupancyStore) GetCellOccupancy(
@@ -131,7 +140,7 @@ func (s *RedisOccupancyStore) GetCellOccupancy(
 
 	pipe := s.client.GetRaw().Pipeline()
 	supplyCmd := pipe.SCard(ctx, supplyKey)
-	demandCmd := scripts.GetAndPruneCellDemandScript.Run(ctx, pipe, []string{demandKey}, cutoffScore)
+	demandCmd := scripts.GetAndPruneCellDemandScript.Eval(ctx, pipe, []string{demandKey}, cutoffScore)
 
 	if _, err := pipe.Exec(ctx); err != nil && err != goredis.Nil {
 		observability.RedisOperationsTotal.WithLabelValues("pipeline_occupancy", "error").Inc()
@@ -140,9 +149,18 @@ func (s *RedisOccupancyStore) GetCellOccupancy(
 		return occupancy.CellOccupancy{}, err
 	}
 
-	supplyCount, _ := supplyCmd.Result()
-	rawDemand, _ := demandCmd.Result()
-	demandCount, _ := rawDemand.(int64)
+	supplyCount, err := supplyCmd.Result()
+	if err != nil {
+		return occupancy.CellOccupancy{}, fmt.Errorf("read supply for cell %s: %w", cellID, err)
+	}
+	rawDemand, err := demandCmd.Result()
+	if err != nil {
+		return occupancy.CellOccupancy{}, fmt.Errorf("read demand for cell %s: %w", cellID, err)
+	}
+	demandCount, ok := rawDemand.(int64)
+	if !ok {
+		return occupancy.CellOccupancy{}, fmt.Errorf("read demand for cell %s: unexpected Redis result type %T", cellID, rawDemand)
+	}
 
 	occ := occupancy.NewCellOccupancy(
 		cellID,
@@ -190,7 +208,7 @@ func (s *RedisOccupancyStore) GetMultiCellOccupancy(
 		supplyKey := h3CellDriversKey(cellID)
 		demandKey := h3CellDemandKey(cellID)
 		supplyCmds[i] = pipe.SCard(ctx, supplyKey)
-		demandCmds[i] = scripts.GetAndPruneCellDemandScript.Run(ctx, pipe, []string{demandKey}, cutoffScore)
+		demandCmds[i] = scripts.GetAndPruneCellDemandScript.Eval(ctx, pipe, []string{demandKey}, cutoffScore)
 	}
 
 	if _, err := pipe.Exec(ctx); err != nil && err != goredis.Nil {
@@ -201,9 +219,18 @@ func (s *RedisOccupancyStore) GetMultiCellOccupancy(
 	}
 
 	for i, cellID := range cellIDs {
-		supplyCount, _ := supplyCmds[i].Result()
-		rawDemand, _ := demandCmds[i].Result()
-		demandCount, _ := rawDemand.(int64)
+		supplyCount, err := supplyCmds[i].Result()
+		if err != nil {
+			return nil, fmt.Errorf("read supply for cell %s: %w", cellID, err)
+		}
+		rawDemand, err := demandCmds[i].Result()
+		if err != nil {
+			return nil, fmt.Errorf("read demand for cell %s: %w", cellID, err)
+		}
+		demandCount, ok := rawDemand.(int64)
+		if !ok {
+			return nil, fmt.Errorf("read demand for cell %s: unexpected Redis result type %T", cellID, rawDemand)
+		}
 
 		occ := occupancy.NewCellOccupancy(
 			cellID,

@@ -9,6 +9,16 @@ Phase: Phase A — Cell Demand Tracking Foundation
 Status: REVISED SPECIFICATION (Ready for Approval)
 Date: August 23, 2026
 
+## Current Phase A Implementation Contract (2026-10-03)
+
+The corrections implemented in code supersede older examples below where they conflict: ride creation requires pickup coordinates; `(0,0)` is valid; ride events use snake_case JSON; demand projection uses the separate `demand-projection` processed-event identity and records it only after Redis succeeds; and recovery reconciles the union of PostgreSQL-expected cells and the Redis cell registry using per-cell Lua scripts. Convergence after a concurrent snapshot race is eventual on a later reconciliation run.
+
+## Phase A Implementation Verification (2026-10-03)
+
+Implemented and verified: focused application, event, PostgreSQL repository, and live Redis integration tests; `go test -ldflags=-linkmode=internal ./...`; `go vet ./...`; and `go test -cover -ldflags=-linkmode=internal ./...` pass. The Redis integration tests were also run uncached against a local Redis instance. `go test -race ./...` was attempted but cannot link with the host Windows MinGW/sanitizer toolchain (missing Windows runtime symbols). The versioned pickup-coordinate SQL migration and repository binding/scanning were reviewed/tested, but not applied to PostgreSQL because no local PostgreSQL client/server is available.
+
+Phase A is awaiting user verification. Do not start Phase B or Phase C until the user verifies this phase.
+
 1. Objective
 
 The objective of Stage 7 — Phase A is to establish a high-performance, fault-tolerant, and idempotent real-time demand tracking foundation at the Uber H3 spatial cell level (Resolution 8).
@@ -206,26 +216,26 @@ Ride completed (demand was already decremented at acceptance).
              AUTHORITATIVE DATA (PostgreSQL)
 
     ┌──────────────────────────────────────────────┐
-    │ rides (id, status, pickup_lat, pickup_lng) │
+    │ rides (id, status, pickup_latitude, pickup_longitude) │
     └──────────────────────┬───────────────────────┘
     │ Asynchronous Domain Events (Outbox)
     ▼
     DERIVED REAL-TIME STATE (Redis)
     ┌──────────────────────────────────────────────┐
-    │ demand:ride:<ride_id> ──> "cell_id" │ (String, TTL 15m)
+    │ demand:ride:<ride_id> ──> "cell_id" │ (String, configured TTL)
     │ demand:h3:<cell_id>:rides ──> ZSET │ (Member=ride_id, Score=timestamp)
     └──────────────────────┬───────────────────────┘
     │ Read / Prune Operations
     ▼
 
-1.  ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf (now - 900) [Age Pruning]
+1.  ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf (now - configured TTL) [Projection Freshness]
 1.  ZCARD demand:h3:<cell_id>:rides ───────────────────────────> Real-Time Demand
 
 Authoritative Source of Truth:
 PostgreSQL rides table (status IN ('REQUESTED', 'MATCHING')).
 
 Derived Real-Time State:
-Redis ZSETs updated asynchronously via EventRouter side-effect handlers and cleaned up via score pruning + reconciliation.
+Redis ZSETs updated asynchronously by the demand projection after matching/event handling. Projection idempotency is recorded separately and only after a Redis operation succeeds; score pruning and PostgreSQL-backed reconciliation repair derived state.
 
 State Lifespan:
 Transient (lives while ride is active in matching). Derived state can be fully rebuilt or reconciled from PostgreSQL at any time.
@@ -272,7 +282,7 @@ HIGH (Set members never expire)
 
 MEDIUM (Requires score pruning)
 
-ZERO (ZSET score pruning + demand:ride:<id> TTL 15m)
+ZERO (ZSET score pruning + demand:ride:<id> configured TTL)
 
 Idempotency
 
@@ -333,7 +343,7 @@ Description:
 Option D utilizes two complementary Redis structures:
 
 Ride-to-Cell Pointer:
-demand:ride:<ride_id> -> Value: <cell_id> (String with 15-minute TTL).
+demand:ride:<ride_id> -> Value: <cell_id> (String with configured TTL; 30-minute default).
 
 Cell Active Rides ZSET:
 demand:h3:<cell_id>:rides -> ZSET where member = ride_id and score = unix_timestamp_seconds.
@@ -341,13 +351,13 @@ demand:h3:<cell_id>:rides -> ZSET where member = ride_id and score = unix_timest
 Solving the Cell Set Leak Issue:
 
 In plain Sets (SADD), expiring demand:ride:<ride_id> leaves the member orphaned in demand:h3:<cell_id>:rides.
-By using a ZSET with timestamp scores, any ride older than 15 minutes ($900$ seconds) can be pruned natively in Redis via ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf <now - 900>.
+By using ZSET scores for the last projection refresh, entries that have not been refreshed within the configured demand TTL can be pruned natively in Redis. Reconciliation refreshes scores for rides still active in PostgreSQL.
 
 Read Operation:
 
 To get active demand count for cell <cell_id>:
 
-ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf (now - 900)
+ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf (now - configured TTL)
 
 ZCARD demand:h3:<cell_id>:rides $\rightarrow$ Active Demand Count.
 
@@ -355,11 +365,11 @@ Write Operations (Lua Script Encapsulation):
 
 AddActiveDemand (on ride.requested):
 
-SET demand:ride:<ride_id> <cell_id> EX 900
+SET demand:ride:<ride_id> <cell_id> EX <configured TTL>
 
 ZADD demand:h3:<cell_id>:rides <now_timestamp> <ride_id>
 
-EXPIRE demand:h3:<cell_id>:rides 900
+EXPIRE demand:h3:<cell_id>:rides <configured TTL>
 
 RemoveActiveDemand (on driver.accepted / ride.cancelled):
 
@@ -426,15 +436,15 @@ Resolve pickup_lat, pickup_lng $\rightarrow$ cell_id. Build expectedRides[cell_i
 Execute Convergent Diff per Cell:
 For each cell:
 
-Fetch active Redis ZSET members (ZRANGE demand:h3:<cell_id>:rides 0 -1).
+Read known Redis cells from `demand:h3:cells`; reconcile the union of Redis-known cells and PostgreSQL-expected cells.
 
-Remove Stale Rides (ZREM): Any ride_id in Redis that is NO LONGER active in PostgreSQL is removed.
+For each cell, run one atomic Lua reconciliation. Remove stale ZSET members and delete a ride pointer only when it still points to the cell being reconciled.
 
-Add Missing Rides (ZADD): Any active ride_id in PostgreSQL missing from Redis is added with its original created_at timestamp score.
+Add Missing Rides (ZADD): Any active ride_id in PostgreSQL missing from Redis is added and its ride pointer refreshed to the authoritative cell.
 
-Prune Expired Scores: Execute ZREMRANGEBYSCORE demand:h3:<cell_id>:rides -inf <now - 900>.
+Prune scores that have not been refreshed within the configured demand TTL. Reconciliation refreshes scores for active PostgreSQL rides.
 
-Result: Convergent diff reconciliation guarantees that concurrent new live ride requests arriving during recovery are never deleted or lost.
+Concurrent writes can temporarily race with the recovery snapshot. Subsequent reconciliation runs restore the projection from current PostgreSQL state; no global Redis clear is used.
 
 12. H3 Cell Resolution
 
@@ -445,7 +455,7 @@ Resolution Mechanism:
 Call geo.H3Service.CellForLocation(lat, lng) at Resolution 8.
 
 Validation:
-If coordinates are invalid (lat < -90 || lat > 90 or 0,0), return error/skip demand tracking (reuses isValidLocation check).
+Coordinates are required at ride creation and validated for latitude/longitude bounds; `(0,0)` is valid. Missing coordinates are represented explicitly in the request contract, not inferred from a coordinate value.
 
 13. Architecture & Port Design
 
@@ -478,34 +488,19 @@ import (
 )
 
 type CellDemandStore interface {
-AddActiveDemand(ctx context.Context, rideID uuid.UUID, cellID string, createdAt time.Time) error
+AddActiveDemand(ctx context.Context, rideID uuid.UUID, cellID string) error
 RemoveActiveDemand(ctx context.Context, rideID uuid.UUID, cellID string) error
 GetCellDemand(ctx context.Context, cellID string) (int, error)
 GetMultiCellDemand(ctx context.Context, cellIDs []string) (map[string]int, error)
+ListDemandCells(ctx context.Context) ([]string, error)
 ReconcileCellDemand(ctx context.Context, cellID string, activeRideIDs map[uuid.UUID]time.Time) error
 }
 
 14. EventRouter Integration
 
-Demand tracking will be integrated directly into EventRouter.dispatchSideEffect:
+Demand projection runs after the matching transaction or side-effect handler succeeds, under the separate `demand-projection` processed-event identity. `ride.requested` carries `ride_id`, `pickup_latitude`, and `pickup_longitude`; `ride.accepted` carries `ride_id` and `driver_id`. Projection errors are returned and the demand marker is written only after projection succeeds.
 
-func (r \*EventRouter) dispatchSideEffect(ctx context.Context, envelope appevents.Envelope) error {
-switch envelope.Type {
-
-    case "ride.requested":
-    	// Existing logic...
-    	// NEW: Dispatch to DemandService.HandleRideRequested(ctx, rideID, lat, lng, createdAt)
-
-    case "driver.accepted":
-    	// Existing logic...
-    	// NEW: Dispatch to DemandService.HandleDriverAccepted(ctx, rideID)
-
-    // ...
-    }
-
-}
-
-This keeps demand updates completely decoupled from synchronous ride creation and matching transactions.
+This keeps demand updates decoupled from synchronous ride creation and matching transactions while making projection errors visible to the consumer.
 
 15. Stage 9 & Stage 7 Reconciliation Separation
 
@@ -589,7 +584,7 @@ TestDemandStore_AddActiveDemand: Verify ZADD and SET atomic key creation.
 
 TestDemandStore_RemoveActiveDemand: Verify ZREM and DEL key removal.
 
-TestDemandStore_ZSetAgePruning: Verify ZREMRANGEBYSCORE automatically purges rides older than 15 minutes.
+TestDemandStore_ZSetAgePruning: Verify ZREMRANGEBYSCORE prunes entries not refreshed within the configured TTL while active ride reconciliation refreshes active members.
 
 TestDemandStore_Idempotency: Execute AddActiveDemand 10x for same ride; verify ZCard == 1.
 
@@ -660,7 +655,7 @@ Leaked Demand Keys (Missing cancellation event)
 
 Overcounts demand in cell
 
-Option D uses ZSET timestamp scores + ZREMRANGEBYSCORE age pruning (15m) + DemandRecoveryService convergent reconciliation.
+Option D uses ZSET projection-refresh scores + configured-TTL pruning + DemandRecoveryService reconciliation.
 
 Race Conditions During Recovery
 

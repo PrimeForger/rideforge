@@ -2,11 +2,11 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:15
+    image: postgis/postgis:15-3.5
     container_name: rideforge-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: 1234
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD before starting PostgreSQL}
       POSTGRES_DB: rideforge
     ports:
       - "5432:5432"

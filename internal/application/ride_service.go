@@ -45,6 +45,9 @@ func (s *RideService) CreateRide(
 	fromRegion region.Region,
 	toRegion region.Region,
 ) (uuid.UUID, error) {
+	if err := req.ValidatePickup(); err != nil {
+		return uuid.Nil, err
+	}
 
 	// 1. Legal region validation
 	if !region.IsRideAllowed(fromRegion, toRegion) {
@@ -52,7 +55,7 @@ func (s *RideService) CreateRide(
 	}
 
 	// 2. Create domain aggregate
-	r := ride.NewRide(req.RiderID)
+	r := ride.NewRide(req.RiderID, *req.PickupLatitude, *req.PickupLongitude)
 
 	err := s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
 
@@ -62,7 +65,11 @@ func (s *RideService) CreateRide(
 		}
 
 		// 4. Emit event
-		domainEvent := events.RideRequestedEvent{RideID: r.ID}
+		domainEvent := events.RideRequestedEvent{
+			RideID:          r.ID,
+			PickupLatitude:  r.PickupLatitude,
+			PickupLongitude: r.PickupLongitude,
+		}
 
 		envelope := appevents.Envelope{
 			ID:        uuid.NewString(),

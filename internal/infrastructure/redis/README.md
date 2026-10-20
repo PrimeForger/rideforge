@@ -10,7 +10,7 @@ Manages transient real-time state in Redis: driver location indexes, atomic dist
 `github.com/redis/go-redis/v9`, `internal/ports`, `internal/infrastructure/redis/scripts`.
 
 ## Invariants & Gotchas
-Redis is used for transient real-time state only (never ground-truth persistence). All keys must have explicit TTLs. All multi-key updates must use Lua scripts.
+Redis is used for transient real-time state only (never ground-truth persistence). Demand uses a ride-to-cell pointer, per-cell ZSET, and cell registry for stale-cell recovery. All demand multi-key updates use Lua scripts; PostgreSQL remains authoritative. Driver H3 membership and the `drivers:online` registry include only available drivers; accepted rides remove supply membership, and PostgreSQL-backed H3 recovery restores eligible drivers. Occupancy Lua reads use `EVAL` in pipelines so reads work after a Redis restart clears its script cache, and Redis command errors are returned rather than converted to zero counts.
 
 ## Human-Approval Required
 Yes. Modifying distributed locks or Lua script invocations directly affects driver concurrency safety.

@@ -102,7 +102,7 @@ func main() {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(7)
+	wg.Add(8)
 
 	go func() {
 		defer wg.Done()
@@ -166,6 +166,11 @@ func main() {
 	go func() {
 		defer wg.Done()
 		container.DemandReconciliationWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		container.SurgePolicyRefreshWorker.Start(ctx)
 	}()
 
 	go func() {

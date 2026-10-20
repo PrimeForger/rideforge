@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
@@ -67,6 +68,7 @@ func (s *DemandRecoveryService) RebuildDemand(ctx context.Context) (DemandRecove
 
 	// Group active rides by H3 cell ID
 	cellRidesMap := make(map[string]map[uuid.UUID]time.Time)
+	activeRideCount := 0
 
 	for _, r := range activeRides {
 		if r == nil {
@@ -78,17 +80,37 @@ func (s *DemandRecoveryService) RebuildDemand(ctx context.Context) (DemandRecove
 			continue
 		}
 
-		// Fallback cell calculation or default center cell if coordinates not on entity
-		// In production, ride aggregate carries pickup coords; if 0,0, skip location
-		cellID := "8860145261fffff" // Default central cell fallback if coordinates absent
+		cellID, err := s.h3.CellForLocation(r.PickupLatitude, r.PickupLongitude)
+		if err != nil {
+			return DemandRecoveryResult{}, fmt.Errorf("derive H3 cell for active ride %s: %w", r.ID, err)
+		}
 		if cellRidesMap[cellID] == nil {
 			cellRidesMap[cellID] = make(map[uuid.UUID]time.Time)
 		}
 		cellRidesMap[cellID][r.ID] = r.CreatedAt
+		activeRideCount++
 	}
 
-	// Convergent diff reconciliation per H3 cell
-	for cellID, rideMap := range cellRidesMap {
+	redisCells, err := s.demandStore.ListDemandCells(ctx)
+	if err != nil {
+		return DemandRecoveryResult{}, fmt.Errorf("list Redis demand cells: %w", err)
+	}
+	cellSet := make(map[string]struct{}, len(cellRidesMap)+len(redisCells))
+	for cellID := range cellRidesMap {
+		cellSet[cellID] = struct{}{}
+	}
+	for _, cellID := range redisCells {
+		cellSet[cellID] = struct{}{}
+	}
+	cells := make([]string, 0, len(cellSet))
+	for cellID := range cellSet {
+		cells = append(cells, cellID)
+	}
+	sort.Strings(cells)
+
+	// Reconcile the union so Redis-only stale cells are removed as well.
+	for _, cellID := range cells {
+		rideMap := cellRidesMap[cellID]
 		if err := s.demandStore.ReconcileCellDemand(ctx, cellID, rideMap); err != nil {
 			if s.log != nil {
 				s.log.Error("failed to reconcile demand for cell",
@@ -104,8 +126,8 @@ func (s *DemandRecoveryService) RebuildDemand(ctx context.Context) (DemandRecove
 
 	duration := time.Since(startTime)
 	result := DemandRecoveryResult{
-		TotalActiveRides: len(activeRides),
-		TotalCells:       len(cellRidesMap),
+		TotalActiveRides: activeRideCount,
+		TotalCells:       len(cells),
 		Duration:         duration,
 	}
 

@@ -13,25 +13,32 @@ type DemandRecoveryRunner interface {
 	RebuildDemand(ctx context.Context) (DemandRecoveryResult, error)
 }
 
+type ActiveCellMetricsRefresher interface {
+	RefreshActiveCellMetrics(ctx context.Context) error
+}
+
 type DemandReconciliationWorker struct {
-	recoveryRunner DemandRecoveryRunner
-	enabled        bool
-	interval       time.Duration
-	log            *zap.Logger
-	running        int32
+	recoveryRunner   DemandRecoveryRunner
+	metricsRefresher ActiveCellMetricsRefresher
+	enabled          bool
+	interval         time.Duration
+	log              *zap.Logger
+	running          int32
 }
 
 func NewDemandReconciliationWorker(
 	recoveryRunner DemandRecoveryRunner,
+	metricsRefresher ActiveCellMetricsRefresher,
 	enabled bool,
 	interval time.Duration,
 	log *zap.Logger,
 ) *DemandReconciliationWorker {
 	return &DemandReconciliationWorker{
-		recoveryRunner: recoveryRunner,
-		enabled:        enabled,
-		interval:       interval,
-		log:            log,
+		recoveryRunner:   recoveryRunner,
+		metricsRefresher: metricsRefresher,
+		enabled:          enabled,
+		interval:         interval,
+		log:              log,
 	}
 }
 
@@ -88,6 +95,11 @@ func (w *DemandReconciliationWorker) runReconciliation(ctx context.Context) {
 
 	observability.DemandReconciliationDurationSeconds.Observe(duration.Seconds())
 	observability.CellActiveDemandTotal.Set(float64(result.TotalActiveRides))
+	if w.metricsRefresher != nil {
+		if err := w.metricsRefresher.RefreshActiveCellMetrics(ctx); err != nil && w.log != nil {
+			w.log.Error("failed to refresh active hot-cell metrics", zap.Error(err))
+		}
+	}
 
 	if w.log != nil {
 		w.log.Info("Demand reconciliation run completed",

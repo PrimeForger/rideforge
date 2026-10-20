@@ -1,7 +1,7 @@
 # Ride Domain (`internal/domain/ride`)
 
 ## Purpose
-Encapsulates the ride lifecycle state machine, offer tracking, pricing models, and ride entity invariants.
+Encapsulates the ride lifecycle state machine, offer tracking, pricing models, and ride entity invariants. Pickup coordinates are part of persisted ride state so demand recovery can derive the correct cell.
 
 ## Public Interface
 `Ride` entity, `Status` enum (`RideRequested`, `RideMatching`, `RideOffered`, `RideAccepted`, `RideDriverArrived`, `RideInProgress`, `RideCompleted`, `RideCancelled`, `RideExpired`), `OfferStatus`, `OfferDeliveryStatus`.

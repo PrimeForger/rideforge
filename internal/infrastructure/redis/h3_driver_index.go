@@ -85,7 +85,7 @@ func (i *H3DriverIndex) UpdateDriverCell(
 		driverID.String(),
 		newCell,
 		int(i.options.DriverCellTTL.Seconds()),
-		driverH3CellPrefix,
+		h3CellDriversPrefix,
 	).Result()
 
 	if err != nil {
@@ -160,7 +160,7 @@ func (i *H3DriverIndex) RemoveDriver(
 			mappingKey,
 		},
 		driverID.String(),
-		driverH3CellPrefix,
+		h3CellDriversPrefix,
 	).Result()
 
 	if err != nil {

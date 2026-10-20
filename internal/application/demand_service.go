@@ -3,7 +3,7 @@ package application
 import (
 	"context"
 	"errors"
-	"time"
+	"math"
 
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
@@ -39,18 +39,16 @@ func (s *DemandService) HandleRideRequested(
 	ctx context.Context,
 	rideID uuid.UUID,
 	lat, lng float64,
-	createdAt time.Time,
 ) error {
 	ctx, span := demandServiceTracer.Start(ctx, "DemandService.HandleRideRequested")
 	defer span.End()
 
 	span.SetAttributes(
 		attribute.String("ride.id", rideID.String()),
-		attribute.Float64("location.lat", lat),
-		attribute.Float64("location.lng", lng),
 	)
 
-	if lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat == 0 && lng == 0) {
+	if math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 ||
+		math.IsNaN(lng) || math.IsInf(lng, 0) || lng < -180 || lng > 180 {
 		observability.CellDemandEventsTotal.WithLabelValues("requested", "invalid_coords").Inc()
 		span.SetStatus(codes.Ok, "skipped_invalid_coords")
 		return nil
@@ -66,7 +64,7 @@ func (s *DemandService) HandleRideRequested(
 
 	span.SetAttributes(attribute.String("h3.cell", cellID))
 
-	if err := s.demandStore.AddActiveDemand(ctx, rideID, cellID, createdAt); err != nil {
+	if err := s.demandStore.AddActiveDemand(ctx, rideID, cellID); err != nil {
 		observability.CellDemandEventsTotal.WithLabelValues("requested", "error").Inc()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "add_active_demand_failed")

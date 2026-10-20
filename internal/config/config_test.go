@@ -2,7 +2,26 @@ package config
 
 import (
 	"testing"
+	"time"
 )
+
+func TestLoadDatabaseSettings(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://db.example/rideforge")
+	t.Setenv("DATABASE_CONNECT_TIMEOUT", "-1s")
+	cfg := Load()
+	if cfg.DatabaseURL != "postgres://db.example/rideforge" {
+		t.Fatalf("database URL was not loaded")
+	}
+	if cfg.DatabaseConnectTimeout != 5*time.Second {
+		t.Fatalf("invalid connect timeout = %s, want 5s", cfg.DatabaseConnectTimeout)
+	}
+
+	t.Setenv("DATABASE_CONNECT_TIMEOUT", "2s")
+	cfg = Load()
+	if cfg.DatabaseConnectTimeout != 2*time.Second {
+		t.Fatalf("configured connect timeout = %s, want 2s", cfg.DatabaseConnectTimeout)
+	}
+}
 
 func TestConfig_ValidateH3_NonPositiveInterval(t *testing.T) {
 	cfg := &Config{
@@ -25,6 +44,41 @@ func TestConfig_ValidateH3_NonPositiveInterval(t *testing.T) {
 
 	if cfgNegative.H3.ReconciliationIntervalSeconds != 300 {
 		t.Errorf("expected ReconciliationIntervalSeconds to default to 300 for negative input, got %d", cfgNegative.H3.ReconciliationIntervalSeconds)
+	}
+}
+
+func TestValidateSurgePolicyKeepsBoundedPositiveRefresh(t *testing.T) {
+	cfg := &Config{SurgePolicy: SurgePolicyConfig{RefreshIntervalSeconds: 0, MaxStalenessSeconds: 0}}
+	cfg.validateSurgePolicy()
+	if cfg.SurgePolicy.RefreshIntervalSeconds <= 0 || cfg.SurgePolicy.MaxStalenessSeconds <= cfg.SurgePolicy.RefreshIntervalSeconds {
+		t.Fatalf("invalid normalized surge refresh config: %+v", cfg.SurgePolicy)
+	}
+	cfg = &Config{SurgePolicy: SurgePolicyConfig{RefreshIntervalSeconds: 20, MaxStalenessSeconds: 10}}
+	cfg.validateSurgePolicy()
+	if cfg.SurgePolicy.MaxStalenessSeconds <= cfg.SurgePolicy.RefreshIntervalSeconds {
+		t.Fatalf("staleness must exceed refresh interval: %+v", cfg.SurgePolicy)
+	}
+}
+
+func TestConfig_ValidateDemand_NonPositiveInterval(t *testing.T) {
+	for _, interval := range []int{0, -10} {
+		cfg := &Config{Demand: DemandConfig{ReconciliationIntervalSeconds: interval}}
+		cfg.validateDemand()
+		if cfg.Demand.ReconciliationIntervalSeconds != 300 {
+			t.Errorf("interval %d normalized to %d, want 300", interval, cfg.Demand.ReconciliationIntervalSeconds)
+		}
+	}
+}
+
+func TestConfig_Load_NormalizesDemandReconciliationInterval(t *testing.T) {
+	for _, interval := range []string{"0", "-5"} {
+		t.Run(interval, func(t *testing.T) {
+			t.Setenv("DEMAND_RECONCILIATION_INTERVAL_SECONDS", interval)
+			cfg := Load()
+			if cfg.Demand.ReconciliationIntervalSeconds <= 0 {
+				t.Fatalf("demand reconciliation interval must be positive, got %d", cfg.Demand.ReconciliationIntervalSeconds)
+			}
+		})
 	}
 }
 
@@ -248,4 +302,3 @@ func TestConfig_HelperParsers(t *testing.T) {
 		t.Errorf("expected fallback 10, got %v", v)
 	}
 }
-

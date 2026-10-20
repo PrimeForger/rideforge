@@ -43,4 +43,5 @@ type GeoIndexer interface {
 type RealtimeDriverCache interface {
 	GetOnlineDriverIDs(ctx context.Context) ([]uuid.UUID, error)
 	LoadDrivers(ctx context.Context, driverIDs []uuid.UUID) ([]*driver.Driver, error)
+	MarkOnline(ctx context.Context, driverID uuid.UUID, lat, lng float64) error
 }

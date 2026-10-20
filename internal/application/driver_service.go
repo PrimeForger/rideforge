@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/driver"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
@@ -131,26 +133,28 @@ func (s *DriverService) CompleteRide(
 	ctx context.Context,
 	driverID uuid.UUID,
 ) error {
-
-	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
-
-		driver, err := s.driverRepo.GetByID(ctx, driverID)
+	var completedDriver *driver.Driver
+	err := s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+		driver, err := s.driverRepo.GetByIDTx(ctx, tx, driverID)
 		if err != nil {
 			return err
 		}
 
 		driver.CompleteRide()
 
-		if err := s.driverRepo.Save(ctx, driver); err != nil {
+		if err := s.driverRepo.SaveTx(ctx, tx, driver); err != nil {
 			return err
 		}
-
-		// TODO: Check wheather this function is complete or not
-		// back to geo
-		// (location already known, just ensure present)
-
+		completedDriver = driver
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if completedDriver == nil {
+		return errors.New("completed driver was not loaded")
+	}
+	return s.driverLocationService.MarkAvailable(ctx, driverID, completedDriver.Lat, completedDriver.Lng)
 }
 
 func (s *DriverService) emitEvent(

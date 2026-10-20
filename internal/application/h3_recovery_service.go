@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/domain/driver"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/location"
 	"github.com/ashadashraf/ride-hail-app/internal/ports"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -81,15 +82,17 @@ func (s *H3RecoveryService) RebuildIndex(ctx context.Context) (RecoveryResult, e
 
 	// Step 2: DriverCache may provide fresher coordinates ONLY for drivers in validDriverMap.
 	// DriverCache failure is logged at WARN level and recovery continues with PostgreSQL coordinates.
+	var redisOnlineIDs []uuid.UUID
 	if s.driverCache != nil {
-		cacheOnlineIDs, err := s.driverCache.GetOnlineDriverIDs(ctx)
+		redisOnlineIDs, err = s.driverCache.GetOnlineDriverIDs(ctx)
 		if err != nil {
 			if s.log != nil {
 				s.log.Warn("failed to fetch online driver IDs from driver cache during recovery", zap.Error(err))
 			}
-		} else if len(cacheOnlineIDs) > 0 {
-			targetIDs := make([]uuid.UUID, 0, len(cacheOnlineIDs))
-			for _, id := range cacheOnlineIDs {
+			redisOnlineIDs = nil
+		} else if len(redisOnlineIDs) > 0 {
+			targetIDs := make([]uuid.UUID, 0, len(redisOnlineIDs))
+			for _, id := range redisOnlineIDs {
 				if _, exists := validDriverMap[id]; exists {
 					targetIDs = append(targetIDs, id)
 				}
@@ -103,7 +106,7 @@ func (s *H3RecoveryService) RebuildIndex(ctx context.Context) (RecoveryResult, e
 					}
 				} else {
 					for _, cd := range cachedDrivers {
-						if cd != nil && isValidLocation(cd.Lat, cd.Lng) {
+						if cd != nil && (location.Coordinate{Lat: cd.Lat, Lng: cd.Lng}).IsValid() {
 							if existing, found := validDriverMap[cd.ID]; found {
 								existing.Lat = cd.Lat
 								existing.Lng = cd.Lng
@@ -130,12 +133,18 @@ func (s *H3RecoveryService) RebuildIndex(ctx context.Context) (RecoveryResult, e
 	for _, d := range validDriverMap {
 		result.TotalDrivers++
 
-		if !isValidLocation(d.Lat, d.Lng) {
+		if !(location.Coordinate{Lat: d.Lat, Lng: d.Lng}).IsValid() {
 			result.SkippedDrivers++
 			if err := s.removeDriverFromDerivedIndexes(ctx, d.ID); err != nil {
 				return RecoveryResult{}, err
 			}
 			continue
+		}
+
+		if s.driverCache != nil {
+			if err := s.driverCache.MarkOnline(ctx, d.ID, d.Lat, d.Lng); err != nil {
+				return RecoveryResult{}, fmt.Errorf("restore available driver cache state for %s: %w", d.ID, err)
+			}
 		}
 
 		cell, err := s.h3.CellForLocation(d.Lat, d.Lng)
@@ -187,19 +196,12 @@ func (s *H3RecoveryService) RebuildIndex(ctx context.Context) (RecoveryResult, e
 		restoredSet[d.ID] = struct{}{}
 	}
 
-	// Step 5: Reconcile & remove stale drivers present in Redis online set but missing from restored valid driver set
+	// Step 5: Reconcile against the Redis online-driver snapshot fetched in Step 2.
 	if s.driverCache != nil {
-		redisOnlineIDs, err := s.driverCache.GetOnlineDriverIDs(ctx)
-		if err != nil {
-			if s.log != nil {
-				s.log.Warn("failed to fetch online driver IDs for stale driver cleanup", zap.Error(err))
-			}
-		} else {
-			for _, redisID := range redisOnlineIDs {
-				if _, active := restoredSet[redisID]; !active {
-					if err := s.removeDriverFromDerivedIndexes(ctx, redisID); err != nil {
-						return RecoveryResult{}, err
-					}
+		for _, redisID := range redisOnlineIDs {
+			if _, active := restoredSet[redisID]; !active {
+				if err := s.removeDriverFromDerivedIndexes(ctx, redisID); err != nil {
+					return RecoveryResult{}, err
 				}
 			}
 		}
@@ -246,14 +248,4 @@ func (s *H3RecoveryService) removeDriverFromDerivedIndexes(ctx context.Context, 
 	}
 
 	return nil
-}
-
-func isValidLocation(lat, lng float64) bool {
-	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
-		return false
-	}
-	if lat == 0 && lng == 0 {
-		return false
-	}
-	return true
 }

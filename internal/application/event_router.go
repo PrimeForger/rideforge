@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
@@ -103,6 +104,12 @@ func (r *EventRouter) Handle(ctx context.Context, envelope appevents.Envelope) e
 		return fail(errors.New("event type is required"), "missing_event_type")
 	}
 
+	if envelope.Type == "ride.accepted" {
+		if err := r.markAcceptedDriverUnavailable(ctx, envelope); err != nil {
+			return fail(err, "accepted_driver_supply_update_failed")
+		}
+	}
+
 	var err error
 
 	switch envelope.Type {
@@ -121,8 +128,37 @@ func (r *EventRouter) Handle(ctx context.Context, envelope appevents.Envelope) e
 		return fail(err, "handler_error")
 	}
 
+	if envelope.Type == "ride.requested" || envelope.Type == "ride.accepted" {
+		if err := processDemandProjection(ctx, envelope, r.demandService, r.processedEventRepo); err != nil {
+			return fail(err, "demand_projection_failed")
+		}
+	}
+
 	span.SetAttributes(attribute.String("event_router.result", "success"))
 	span.SetStatus(codes.Ok, "success")
+	return nil
+}
+
+func (r *EventRouter) markAcceptedDriverUnavailable(
+	ctx context.Context,
+	envelope appevents.Envelope,
+) error {
+	var data struct {
+		DriverID string `json:"driver_id"`
+	}
+	if err := decodeEventData(envelope, &data); err != nil {
+		return fmt.Errorf("decode accepted driver supply payload: %w", err)
+	}
+	driverID, err := parseUUID(data.DriverID, "driver_id")
+	if err != nil {
+		return err
+	}
+	if err := r.driverCache.MarkBusy(ctx, driverID); err != nil {
+		return fmt.Errorf("mark accepted driver busy in Redis: %w", err)
+	}
+	if _, err := r.h3Index.RemoveDriver(ctx, driverID); err != nil {
+		return fmt.Errorf("remove accepted driver from H3 supply: %w", err)
+	}
 	return nil
 }
 
@@ -347,26 +383,6 @@ func (r *EventRouter) dispatchSideEffect(
 	envelope appevents.Envelope,
 ) error {
 	switch envelope.Type {
-	case "ride.requested":
-		var data struct {
-			RideID string  `json:"ride_id"`
-			Lat    float64 `json:"lat"`
-			Lng    float64 `json:"lng"`
-		}
-		if err := decodeEventData(envelope, &data); err != nil {
-			return err
-		}
-
-		rideID, err := parseUUID(data.RideID, "ride_id")
-		if err != nil {
-			return err
-		}
-
-		if r.demandService != nil {
-			_ = r.demandService.HandleRideRequested(ctx, rideID, data.Lat, data.Lng, envelope.Occurred)
-		}
-		return nil
-
 	case "ride.accepted":
 		var data struct {
 			RideID string `json:"ride_id"`
@@ -378,10 +394,6 @@ func (r *EventRouter) dispatchSideEffect(
 		rideID, err := parseUUID(data.RideID, "ride_id")
 		if err != nil {
 			return err
-		}
-
-		if r.demandService != nil {
-			_ = r.demandService.HandleDriverAccepted(ctx, rideID)
 		}
 
 		return r.rideEventHandler.HandleRideAccepted(ctx, rideID)

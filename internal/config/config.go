@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const defaultDatabaseConnectTimeout = 5 * time.Second
+
 type RankingConfig struct {
 	DistanceWeight     float64
 	AcceptanceWeight   float64
@@ -79,7 +81,12 @@ type DemandConfig struct {
 type OccupancyConfig struct {
 	WarmImbalanceThreshold float64
 	HotImbalanceThreshold  float64
-	MinDemandForHot        int
+	MinDemandForHot        int // HOT classification threshold; surge policy minimum_demand is configured separately.
+}
+
+type SurgePolicyConfig struct {
+	RefreshIntervalSeconds int
+	MaxStalenessSeconds    int
 }
 
 type ExpansionProfileConfig struct {
@@ -91,21 +98,23 @@ type ExpansionProfileConfig struct {
 	NormalMaxCells      int
 	NormalMaxCandidates int
 
-	DenseRingStep       int
-	DenseMaxRing        int
-	DenseMaxCells       int
-	DenseMaxCandidates  int
+	DenseRingStep      int
+	DenseMaxRing       int
+	DenseMaxCells      int
+	DenseMaxCandidates int
 
-	DefaultRingStep     int
-	DefaultMaxCells     int
+	DefaultRingStep      int
+	DefaultMaxCells      int
 	DefaultMaxCandidates int
 }
 
 type Config struct {
-	OfferBatchSize     int
-	MaxDriverAttempts  int
-	SearchRadiusKm     float64
-	DriverOfferTimeout time.Duration
+	DatabaseURL            string
+	DatabaseConnectTimeout time.Duration
+	OfferBatchSize         int
+	MaxDriverAttempts      int
+	SearchRadiusKm         float64
+	DriverOfferTimeout     time.Duration
 
 	Ranking       RankingConfig
 	Realtime      RealtimeConfig
@@ -116,16 +125,19 @@ type Config struct {
 	H3            H3Config
 	Demand        DemandConfig
 	Occupancy     OccupancyConfig
+	SurgePolicy   SurgePolicyConfig
 	Routing       RoutingConfig
 	Expansion     ExpansionProfileConfig
 }
 
 func Load() *Config {
 	cfg := &Config{
-		OfferBatchSize:     getInt("OFFER_BATCH_SIZE", 3),
-		MaxDriverAttempts:  getInt("MAX_DRIVER_ATTEMPTS", 5),
-		SearchRadiusKm:     getFloat("SEARCH_RADIUS_KM", 5.0),
-		DriverOfferTimeout: getDuration("DRIVER_OFFER_TIMEOUT", 10*time.Second),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		DatabaseConnectTimeout: getDuration("DATABASE_CONNECT_TIMEOUT", defaultDatabaseConnectTimeout),
+		OfferBatchSize:         getInt("OFFER_BATCH_SIZE", 3),
+		MaxDriverAttempts:      getInt("MAX_DRIVER_ATTEMPTS", 5),
+		SearchRadiusKm:         getFloat("SEARCH_RADIUS_KM", 5.0),
+		DriverOfferTimeout:     getDuration("DRIVER_OFFER_TIMEOUT", 10*time.Second),
 		Ranking: RankingConfig{
 			DistanceWeight:     getFloat("DISTANCE_WEIGHT", 0.35),
 			AcceptanceWeight:   getFloat("ACCEPTANCE_WEIGHT", 0.20),
@@ -189,6 +201,10 @@ func Load() *Config {
 			HotImbalanceThreshold:  getFloat("OCCUPANCY_HOT_IMBALANCE_THRESHOLD", 1.5),
 			MinDemandForHot:        getInt("OCCUPANCY_MIN_DEMAND_FOR_HOT", 2),
 		},
+		SurgePolicy: SurgePolicyConfig{
+			RefreshIntervalSeconds: getInt("SURGE_POLICY_REFRESH_INTERVAL_SECONDS", 30),
+			MaxStalenessSeconds:    getInt("SURGE_POLICY_MAX_STALENESS_SECONDS", 90),
+		},
 		Routing: RoutingConfig{
 			Provider: getString("ROUTING_PROVIDER", "none"),
 		},
@@ -210,9 +226,23 @@ func Load() *Config {
 	}
 
 	cfg.normalizeWeights()
+	if cfg.DatabaseConnectTimeout <= 0 {
+		cfg.DatabaseConnectTimeout = defaultDatabaseConnectTimeout
+	}
 	cfg.validateMatching()
 	cfg.validateH3()
+	cfg.validateDemand()
+	cfg.validateSurgePolicy()
 	return cfg
+}
+
+func (cfg *Config) validateSurgePolicy() {
+	if cfg.SurgePolicy.RefreshIntervalSeconds <= 0 {
+		cfg.SurgePolicy.RefreshIntervalSeconds = 30
+	}
+	if cfg.SurgePolicy.MaxStalenessSeconds <= cfg.SurgePolicy.RefreshIntervalSeconds {
+		cfg.SurgePolicy.MaxStalenessSeconds = cfg.SurgePolicy.RefreshIntervalSeconds * 3
+	}
 }
 
 func (c *Config) normalizeWeights() {
@@ -247,6 +277,12 @@ func (cfg *Config) validateMatching() {
 func (cfg *Config) validateH3() {
 	if cfg.H3.ReconciliationIntervalSeconds <= 0 {
 		cfg.H3.ReconciliationIntervalSeconds = 300
+	}
+}
+
+func (cfg *Config) validateDemand() {
+	if cfg.Demand.ReconciliationIntervalSeconds <= 0 {
+		cfg.Demand.ReconciliationIntervalSeconds = 300
 	}
 }
 

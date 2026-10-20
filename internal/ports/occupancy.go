@@ -8,6 +8,7 @@ import (
 
 // CellOccupancyStore defines low-level storage operations for reading supply, demand, and derived cell occupancy.
 type CellOccupancyStore interface {
+	ListDemandCells(ctx context.Context) ([]string, error)
 	GetCellSupply(ctx context.Context, cellID string) (int, error)
 	GetMultiCellSupply(ctx context.Context, cellIDs []string) (map[string]int, error)
 	GetCellOccupancy(ctx context.Context, cellID string) (occupancy.CellOccupancy, error)

@@ -23,18 +23,7 @@ func (r *DriverPushTokenRepository) UpsertTx(
 	platform string,
 	token string,
 ) error {
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO driver_push_tokens (
-			driver_id, device_id, platform, token, enabled, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, TRUE, NOW(), NOW())
-		ON CONFLICT (driver_id, device_id)
-		DO UPDATE SET
-			platform = EXCLUDED.platform,
-			token = EXCLUDED.token,
-			enabled = TRUE,
-			updated_at = NOW()
-	`, driverID, deviceID, platform, token)
+	_, err := tx.ExecContext(ctx, driverPushTokenUpsertTx, driverID, deviceID, platform, token)
 
 	return err
 }
@@ -43,12 +32,7 @@ func (r *DriverPushTokenRepository) GetActiveTokens(
 	ctx context.Context,
 	driverID uuid.UUID,
 ) ([]string, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT token
-		FROM driver_push_tokens
-		WHERE driver_id = $1
-		AND enabled = TRUE
-	`, driverID)
+	rows, err := r.db.QueryContext(ctx, driverPushTokenGetActiveTokens, driverID)
 	if err != nil {
 		return nil, err
 	}

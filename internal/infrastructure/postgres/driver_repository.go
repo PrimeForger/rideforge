@@ -20,7 +20,7 @@ func NewDriverRepository(db *sql.DB) *DriverRepository {
 
 func (d *DriverRepository) GetAvailableDrivers(ctx context.Context) ([]*driver.Driver, error) {
 
-	query := `SELECT id, status, lat, lng FROM drivers WHERE status = 'ONLINE'`
+	query := driverGetAvailableDrivers
 
 	rows, err := d.db.QueryContext(ctx, query)
 	if err != nil {
@@ -51,13 +51,7 @@ func (r *DriverRepository) GetAvailableDriversExcludingTx(
 	rideID uuid.UUID,
 ) ([]*driver.Driver, error) {
 
-	query := `
-	SELECT id, status FROM drivers WHERE status = 'ONLINE'
-	AND id NOT IN (
-		SELECT driver_id FROM ride_driver_offers WHERE ride_id = $1
-	)
-	LIMIT 10
-	`
+	query := driverGetAvailableDriversExcludingTx
 
 	rows, err := tx.QueryContext(ctx, query, rideID)
 	if err != nil {
@@ -89,25 +83,7 @@ func (r *DriverRepository) GetEligibleDriversTx(
 		return nil, nil
 	}
 
-	query := `
-	SELECT d.id, d.status,
-	       d.acceptance_rate,
-	       d.cancellation_rate,
-		   d.timeout_rate,
-	       d.rating,
-	       d.completed_rides,
-	       d.last_assigned_at,
-	       d.lat,
-	       d.lng
-	FROM drivers d
-	WHERE d.id = ANY($1)
-	AND d.status = 'ONLINE'
-	AND NOT EXISTS (
-		SELECT 1 FROM ride_driver_offers rdo
-		WHERE rdo.ride_id = $2
-		AND rdo.driver_id = d.id
-	)
-	`
+	query := driverGetEligibleDriversTx
 
 	rows, err := tx.QueryContext(ctx, query, pq.Array(driverIDs), rideID)
 	if err != nil {
@@ -144,7 +120,7 @@ func (r *DriverRepository) GetEligibleDriversTx(
 
 func (d *DriverRepository) GetByID(ctx context.Context, id uuid.UUID) (*driver.Driver, error) {
 
-	query := `SELECT id, status FROM drivers WHERE id=$1`
+	query := driverGetByID
 
 	row := d.db.QueryRowContext(ctx, query, id)
 
@@ -162,7 +138,7 @@ func (d *DriverRepository) GetByID(ctx context.Context, id uuid.UUID) (*driver.D
 
 func (d *DriverRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*driver.Driver, error) {
 
-	query := `SELECT id, status FROM drivers WHERE id=$1`
+	query := driverGetByID
 
 	row := tx.QueryRowContext(ctx, query, id)
 
@@ -180,9 +156,9 @@ func (d *DriverRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UU
 
 func (d *DriverRepository) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*driver.Driver, error) {
 
-	query := `SELECT id, status FROM drivers WHERE id = ANY($1)`
+	query := driverGetByIDs
 
-	rows, err := d.db.QueryContext(ctx, query, ids)
+	rows, err := d.db.QueryContext(ctx, query, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -207,14 +183,7 @@ func (d *DriverRepository) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*dr
 
 func (d *DriverRepository) Save(ctx context.Context, dr *driver.Driver) error {
 
-	query := `
-	INSERT INTO drivers (id, status, lat, lng)
-	VALUES ($1, $2, $3, $4)
-	ON CONFLICT (id) DO UPDATE SET
-	status = EXCLUDED.status,
-	lat = EXCLUDED.lat,
-	lng = EXCLUDED.lng
-	`
+	query := driverSave
 
 	_, err := d.db.ExecContext(ctx, query, dr.ID, string(dr.Status), dr.Lat, dr.Lng)
 	return err
@@ -222,14 +191,7 @@ func (d *DriverRepository) Save(ctx context.Context, dr *driver.Driver) error {
 
 func (d *DriverRepository) SaveTx(ctx context.Context, tx *sql.Tx, dr *driver.Driver) error {
 
-	query := `
-	INSERT INTO drivers (id, status, lat, lng)
-	VALUES ($1, $2, $3, $4)
-	ON CONFLICT (id) DO UPDATE SET
-	status = EXCLUDED.status,
-	lat = EXCLUDED.lat,
-	lng = EXCLUDED.lng
-	`
+	query := driverSave
 
 	_, err := tx.ExecContext(ctx, query, dr.ID, string(dr.Status), dr.Lat, dr.Lng)
 	return err
@@ -243,10 +205,7 @@ func (r *DriverRepository) InsertRideOfferTx(
 	attempt int,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO ride_driver_offers (ride_id, driver_id, status, attempt)
-		VALUES ($1, $2, $3, $4)
-	`, rideID, driverID, ride.OfferStatusOffered, attempt)
+	_, err := tx.ExecContext(ctx, driverInsertRideOfferTx, rideID, driverID, ride.OfferStatusOffered, attempt)
 
 	return err
 }
@@ -258,12 +217,7 @@ func (r *DriverRepository) MarkDriverAcceptedTx(
 	driverID uuid.UUID,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE ride_driver_offers
-		SET status = $3
-		WHERE ride_id = $1 AND driver_id = $2
-		AND status = $4
-	`, rideID, driverID, ride.OfferStatusAccepted, ride.OfferStatusOffered)
+	_, err := tx.ExecContext(ctx, driverUpdatePendingOfferStatusTx, rideID, driverID, ride.OfferStatusAccepted, ride.OfferStatusOffered)
 
 	return err
 }
@@ -275,12 +229,7 @@ func (r *DriverRepository) MarkDriverRejectedTx(
 	driverID uuid.UUID,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE ride_driver_offers
-		SET status = $3
-		WHERE ride_id = $1 AND driver_id = $2
-		AND status = $4
-	`, rideID, driverID, ride.OfferStatusRejected, ride.OfferStatusOffered)
+	_, err := tx.ExecContext(ctx, driverUpdatePendingOfferStatusTx, rideID, driverID, ride.OfferStatusRejected, ride.OfferStatusOffered)
 
 	return err
 }
@@ -292,12 +241,7 @@ func (r *DriverRepository) MarkDriverTimeoutTx(
 	driverID uuid.UUID,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE ride_driver_offers
-		SET status = $3
-		WHERE ride_id = $1 AND driver_id = $2
-		AND status = $4
-	`, rideID, driverID, ride.OfferStatusTimeout, ride.OfferStatusOffered)
+	_, err := tx.ExecContext(ctx, driverUpdatePendingOfferStatusTx, rideID, driverID, ride.OfferStatusTimeout, ride.OfferStatusOffered)
 
 	return err
 }
@@ -311,7 +255,7 @@ func (r *DriverRepository) CountRideAttemptsTx(
 	var count int
 
 	err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM ride_driver_offers WHERE ride_id = $1`,
+		driverCountRideAttemptsTx,
 		rideID,
 	).Scan(&count)
 
@@ -326,11 +270,7 @@ func (r *DriverRepository) UpdateOfferStatusTx(
 	status ride.OfferStatus,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE ride_driver_offers
-		SET status = $3
-		WHERE ride_id = $1 AND driver_id = $2
-	`, rideID, driverID, string(status))
+	_, err := tx.ExecContext(ctx, driverUpdateOfferStatusTx, rideID, driverID, string(status))
 
 	return err
 }
@@ -342,13 +282,7 @@ func (r *DriverRepository) GetActiveOfferDriversTx(
 	excludeDriverID uuid.UUID,
 ) ([]uuid.UUID, error) {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT driver_id
-		FROM ride_driver_offers
-		WHERE ride_id = $1
-		AND driver_id <> $2
-		AND status = 'OFFERED'
-	`, rideID, excludeDriverID)
+	rows, err := tx.QueryContext(ctx, driverGetActiveOfferDriversTx, rideID, excludeDriverID)
 
 	if err != nil {
 		return nil, err
@@ -375,13 +309,7 @@ func (r *DriverRepository) ExpireOtherOffersTx(
 	acceptedDriverID uuid.UUID,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE ride_driver_offers
-		SET status = 'EXPIRED'
-		WHERE ride_id = $1
-		AND driver_id <> $2
-		AND status = 'OFFERED'
-	`, rideID, acceptedDriverID)
+	_, err := tx.ExecContext(ctx, driverExpireOtherOffersTx, rideID, acceptedDriverID)
 
 	return err
 }
@@ -392,13 +320,7 @@ func (r *DriverRepository) MarkDriverBusyTx(
 	driverID uuid.UUID,
 ) error {
 
-	_, err := tx.ExecContext(ctx, `
-		UPDATE drivers
-		SET status = 'BUSY',
-			reserved_for_ride = NULL,
-			reserved_at = NULL
-		WHERE id = $1
-	`, driverID)
+	_, err := tx.ExecContext(ctx, driverMarkDriverBusyTx, driverID)
 
 	return err
 }

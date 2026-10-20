@@ -1,0 +1,55 @@
+name: PostgreSQL schema and queries
+
+on:
+  push:
+    paths:
+      - 'migrations/**'
+      - 'sqlc.yaml'
+      - 'internal/infrastructure/postgres/**'
+      - '.github/workflows/postgres-schema.yml'
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'sqlc.yaml'
+      - 'internal/infrastructure/postgres/**'
+      - '.github/workflows/postgres-schema.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:15-3.5
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ${{ github.run_id }}
+          POSTGRES_DB: rideforge_schema_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rideforge_schema_check"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify migration sequence and rollback
+        run: |
+          docker run --rm --network host -v "$PWD/migrations:/migrations:ro" migrate/migrate:v4.20.1 -path=/migrations -database "$MIGRATION_URL" up
+          docker run --rm --network host -v "$PWD/migrations:/migrations:ro" migrate/migrate:v4.20.1 -path=/migrations -database "$MIGRATION_URL" down 5
+          docker run --rm --network host -v "$PWD/migrations:/migrations:ro" migrate/migrate:v4.20.1 -path=/migrations -database "$MIGRATION_URL" up
+        env:
+          MIGRATION_URL: postgres://postgres:${{ github.run_id }}@127.0.0.1:5432/rideforge_schema_check?sslmode=disable
+      - name: Verify generated queries are current
+        run: |
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+          "$(go env GOPATH)/bin/sqlc" generate
+          test -z "$(git status --porcelain -- internal/infrastructure/postgres)"
+      - name: Test PostgreSQL adapters
+        run: go test ./internal/infrastructure/postgres
+        env:
+          RIDEFORGE_TEST_DATABASE_URL: postgres://postgres:${{ github.run_id }}@127.0.0.1:5432/rideforge_schema_check?sslmode=disable

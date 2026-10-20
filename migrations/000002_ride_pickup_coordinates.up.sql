@@ -1,0 +1,3 @@
+ALTER TABLE rides
+    ADD COLUMN pickup_latitude DOUBLE PRECISION NOT NULL,
+    ADD COLUMN pickup_longitude DOUBLE PRECISION NOT NULL;

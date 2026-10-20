@@ -23,11 +23,11 @@ func newMockDemandStore() *mockDemandStore {
 	}
 }
 
-func (m *mockDemandStore) AddActiveDemand(ctx context.Context, rideID uuid.UUID, cellID string, createdAt time.Time) error {
+func (m *mockDemandStore) AddActiveDemand(ctx context.Context, rideID uuid.UUID, cellID string) error {
 	if m.added[cellID] == nil {
 		m.added[cellID] = make(map[uuid.UUID]time.Time)
 	}
-	m.added[cellID][rideID] = createdAt
+	m.added[cellID][rideID] = time.Now()
 	return nil
 }
 
@@ -69,7 +69,7 @@ func TestDemandService_HandleRideRequested(t *testing.T) {
 
 	// Kochi coordinates
 	lat, lng := 9.9312, 76.2673
-	err := service.HandleRideRequested(ctx, rideID, lat, lng, time.Now())
+	err := service.HandleRideRequested(ctx, rideID, lat, lng)
 	if err != nil {
 		t.Fatalf("unexpected error adding ride requested demand: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDemandService_HandleDriverAccepted(t *testing.T) {
 	rideID := uuid.New()
 
 	lat, lng := 9.9312, 76.2673
-	_ = service.HandleRideRequested(ctx, rideID, lat, lng, time.Now())
+	_ = service.HandleRideRequested(ctx, rideID, lat, lng)
 
 	cellID, _ := h3.CellForLocation(lat, lng)
 
@@ -121,13 +121,47 @@ func TestDemandService_InvalidCoordsSkipped(t *testing.T) {
 	ctx := context.Background()
 	rideID := uuid.New()
 
-	// 0,0 invalid coords
-	err := service.HandleRideRequested(ctx, rideID, 0, 0, time.Now())
+	// Out-of-range coordinates are invalid.
+	err := service.HandleRideRequested(ctx, rideID, 91, 0)
 	if err != nil {
 		t.Fatalf("unexpected error for invalid coords: %v", err)
 	}
 
 	if len(store.added) != 0 {
 		t.Errorf("expected no demand added for invalid coords, got %d cells", len(store.added))
+	}
+}
+
+func (m *mockDemandStore) ListDemandCells(ctx context.Context) ([]string, error) {
+	cells := make([]string, 0, len(m.reconcile)+len(m.added))
+	seen := make(map[string]struct{})
+	for cellID := range m.added {
+		seen[cellID] = struct{}{}
+	}
+	for cellID := range m.reconcile {
+		seen[cellID] = struct{}{}
+	}
+	for cellID := range seen {
+		cells = append(cells, cellID)
+	}
+	return cells, nil
+}
+
+func TestDemandService_ZeroCoordinatesAreValid(t *testing.T) {
+	store := newMockDemandStore()
+	h3 := geo.NewH3Service(8, 1)
+	service := NewDemandService(store, h3, nil)
+
+	rideID := uuid.New()
+	if err := service.HandleRideRequested(context.Background(), rideID, 0, 0); err != nil {
+		t.Fatalf("unexpected error for valid zero coordinates: %v", err)
+	}
+
+	cellID, err := h3.CellForLocation(0, 0)
+	if err != nil {
+		t.Fatalf("failed to calculate H3 cell: %v", err)
+	}
+	if got := len(store.added[cellID]); got != 1 {
+		t.Fatalf("expected demand in cell %s, got %d rides", cellID, got)
 	}
 }

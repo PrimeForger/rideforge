@@ -1,6 +1,9 @@
 package bootstrap
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
@@ -10,6 +13,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
 	applogger "github.com/ashadashraf/ride-hail-app/internal/infrastructure/logger"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/realtime"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
@@ -52,6 +56,12 @@ type Container struct {
 	DemandStore                ports.CellDemandStore
 	DemandService              *application.DemandService
 	DemandRecoveryService      *application.DemandRecoveryService
+	LocalityService            *application.LocalityService
+	LocalityRepository         *postgres.LocalityRepository
+	SurgePolicyRepository      *postgres.SurgePolicyRepository
+	SurgePolicyCache           *application.SurgePolicyCache
+	SurgePolicyRefreshWorker   *application.SurgePolicyRefreshWorker
+	SurgeService               *application.SurgeService
 	OccupancyStore             ports.CellOccupancyStore
 	OccupancyService           *application.OccupancyService
 	Config                     *config.Config
@@ -69,7 +79,12 @@ func NewContainer() (*Container, error) {
 	}
 
 	// --- Database ---
-	db, err := postgres.NewDB("postgres://postgres:postgres@localhost:5432/rideforge?sslmode=disable")
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+	dbCtx, cancelDB := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
+	defer cancelDB()
+	db, err := postgres.NewDB(dbCtx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +102,8 @@ func NewContainer() (*Container, error) {
 
 	// -- Geo --
 	h3Service := geo.NewH3Service(cfg.H3.Resolution, cfg.H3.SearchRing)
+	localityRepo := postgres.NewLocalityRepository(db, h3Service)
+	surgePolicyRepo := postgres.NewSurgePolicyRepository(db)
 
 	// --- Redis ---
 	redisClient, err := redis.NewClient("localhost:6379")
@@ -201,6 +218,19 @@ func NewContainer() (*Container, error) {
 	demandRecoveryService := application.NewDemandRecoveryService(rideRepo, h3Service, demandStore, log)
 
 	occupancyService := application.NewOccupancyService(occupancyStore, h3Service, log)
+	localityService := application.NewLocalityService(localityRepo, localityRepo)
+	surgeMetrics := observability.SurgeMetrics{}
+	surgePolicyCache := application.NewSurgePolicyCache(
+		surgePolicyRepo,
+		time.Duration(cfg.SurgePolicy.MaxStalenessSeconds)*time.Second,
+	)
+	surgePolicyRefreshWorker := application.NewSurgePolicyRefreshWorker(
+		surgePolicyCache,
+		time.Duration(cfg.SurgePolicy.RefreshIntervalSeconds)*time.Second,
+		surgeMetrics,
+		log,
+	)
+	surgeService := application.NewSurgeService(h3Service, localityRepo, surgePolicyCache, occupancyService, surgeMetrics, log)
 
 	// -- Handlers --
 	rideEventHandler := matching.NewRideEventHandler(timeoutScheduler)
@@ -217,6 +247,7 @@ func NewContainer() (*Container, error) {
 	)
 	demandReconciliationWorker := application.NewDemandReconciliationWorker(
 		demandRecoveryService,
+		occupancyService,
 		cfg.Demand.ReconciliationEnabled,
 		time.Duration(cfg.Demand.ReconciliationIntervalSeconds)*time.Second,
 		log,
@@ -271,6 +302,12 @@ func NewContainer() (*Container, error) {
 		DemandRecoveryService:        demandRecoveryService,
 		OccupancyStore:               occupancyStore,
 		OccupancyService:             occupancyService,
+		LocalityService:              localityService,
+		LocalityRepository:           localityRepo,
+		SurgePolicyRepository:        surgePolicyRepo,
+		SurgePolicyCache:             surgePolicyCache,
+		SurgePolicyRefreshWorker:     surgePolicyRefreshWorker,
+		SurgeService:                 surgeService,
 		Config:                       cfg,
 		Logger:                       log,
 	}, nil

@@ -54,7 +54,6 @@ func (s *RedisDemandStore) AddActiveDemand(
 	ctx context.Context,
 	rideID uuid.UUID,
 	cellID string,
-	createdAt time.Time,
 ) error {
 	ctx, span := demandTracer.Start(ctx, "demand.add")
 	defer span.End()
@@ -67,21 +66,22 @@ func (s *RedisDemandStore) AddActiveDemand(
 	mappingKey := rideDemandKey(rideID)
 	cellZSetKey := h3CellDemandKey(cellID)
 
-	score := createdAt.Unix()
-	if score <= 0 {
-		score = time.Now().Unix()
-	}
+	// Scores track the last projection refresh so active rides remain visible
+	// even when their original request is older than the demand TTL.
+	score := time.Now().Unix()
 
 	ttlSeconds := int(s.options.DemandTTL.Seconds())
 
 	_, err := scripts.AddActiveDemandScript.Run(
 		ctx,
 		s.client.GetRaw(),
-		[]string{mappingKey, cellZSetKey},
+		[]string{mappingKey, cellZSetKey, demandCellRegistryKey},
 		rideID.String(),
 		cellID,
 		score,
 		ttlSeconds,
+		h3CellDemandPrefix,
+		h3CellDemandSuffix,
 	).Result()
 
 	if err != nil {
@@ -111,10 +111,11 @@ func (s *RedisDemandStore) RemoveActiveDemand(
 	res, err := scripts.RemoveActiveDemandScript.Run(
 		ctx,
 		s.client.GetRaw(),
-		[]string{mappingKey},
+		[]string{mappingKey, demandCellRegistryKey},
 		rideID.String(),
 		h3CellDemandPrefix,
 		h3CellDemandSuffix,
+		cellID,
 	).Result()
 
 	if err != nil && err != goredis.Nil {
@@ -126,15 +127,18 @@ func (s *RedisDemandStore) RemoveActiveDemand(
 	removedCell, _ := res.(string)
 	if removedCell != "" {
 		span.SetAttributes(attribute.String("h3.cell", removedCell))
-	} else if cellID != "" {
-		// Fallback: if mapping key expired, explicitly ZREM from known cell
-		cellZSetKey := h3CellDemandKey(cellID)
-		_ = s.client.GetRaw().ZRem(ctx, cellZSetKey, rideID.String()).Err()
-		span.SetAttributes(attribute.String("h3.cell", cellID))
 	}
 
 	span.SetStatus(codes.Ok, "active_demand_removed")
 	return nil
+}
+
+func (s *RedisDemandStore) ListDemandCells(ctx context.Context) ([]string, error) {
+	cells, err := s.client.GetRaw().SMembers(ctx, demandCellRegistryKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("list demand cells: %w", err)
+	}
+	return cells, nil
 }
 
 func (s *RedisDemandStore) GetCellDemand(
@@ -190,7 +194,7 @@ func (s *RedisDemandStore) GetMultiCellDemand(
 
 	for i, cellID := range cellIDs {
 		cellZSetKey := h3CellDemandKey(cellID)
-		cmds[i] = scripts.GetAndPruneCellDemandScript.Run(
+		cmds[i] = scripts.GetAndPruneCellDemandScript.Eval(
 			ctx,
 			pipe,
 			[]string{cellZSetKey},
@@ -208,10 +212,12 @@ func (s *RedisDemandStore) GetMultiCellDemand(
 	for i, cellID := range cellIDs {
 		raw, err := cmds[i].Result()
 		if err != nil {
-			result[cellID] = 0
-			continue
+			return nil, fmt.Errorf("read demand for cell %s: %w", cellID, err)
 		}
-		count, _ := raw.(int64)
+		count, ok := raw.(int64)
+		if !ok {
+			return nil, fmt.Errorf("read demand for cell %s: unexpected Redis result type %T", cellID, raw)
+		}
 		result[cellID] = int(count)
 	}
 
@@ -232,55 +238,31 @@ func (s *RedisDemandStore) ReconcileCellDemand(
 		attribute.Int("active_rides.count", len(activeRideIDs)),
 	)
 
-	cellZSetKey := h3CellDemandKey(cellID)
-
-	// 1. Fetch current ZSET members in Redis
-	redisMembers, err := s.client.GetRaw().ZRange(ctx, cellZSetKey, 0, -1).Result()
-	if err != nil && err != goredis.Nil {
+	args := make([]interface{}, 0, 1+len(activeRideIDs)*2)
+	cutoffScore := time.Now().Add(-s.options.DemandTTL).Unix()
+	args = append(args,
+		cellID,
+		h3CellDemandPrefix,
+		h3CellDemandSuffix,
+		rideDemandPrefix,
+		int(s.options.DemandTTL.Seconds()),
+		cutoffScore,
+		len(activeRideIDs),
+	)
+	projectionTime := time.Now().Unix()
+	for rideID := range activeRideIDs {
+		args = append(args, rideID.String(), projectionTime)
+	}
+	_, err := scripts.ReconcileCellDemandScript.Run(
+		ctx,
+		s.client.GetRaw(),
+		[]string{h3CellDemandKey(cellID), demandCellRegistryKey},
+		args...,
+	).Result()
+	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "fetch_zset_failed")
-		return err
-	}
-
-	redisSet := make(map[uuid.UUID]struct{}, len(redisMembers))
-	for _, m := range redisMembers {
-		if id, err := uuid.Parse(m); err == nil {
-			redisSet[id] = struct{}{}
-		}
-	}
-
-	pipe := s.client.GetRaw().TxPipeline()
-
-	// 2. Convergent Removal: Remove rides present in Redis ZSET that are no longer active in PostgreSQL
-	for redisID := range redisSet {
-		if _, active := activeRideIDs[redisID]; !active {
-			pipe.ZRem(ctx, cellZSetKey, redisID.String())
-			pipe.Del(ctx, rideDemandKey(redisID))
-		}
-	}
-
-	// 3. Convergent Addition: Add active PostgreSQL rides missing from Redis ZSET
-	for activeID, createdAt := range activeRideIDs {
-		score := createdAt.Unix()
-		if score <= 0 {
-			score = time.Now().Unix()
-		}
-		pipe.ZAdd(ctx, cellZSetKey, goredis.Z{
-			Score:  float64(score),
-			Member: activeID.String(),
-		})
-		pipe.Set(ctx, rideDemandKey(activeID), cellID, s.options.DemandTTL)
-	}
-
-	// 4. Prune expired timestamp scores & set TTL
-	cutoffScore := float64(time.Now().Add(-s.options.DemandTTL).Unix())
-	pipe.ZRemRangeByScore(ctx, cellZSetKey, "-inf", fmt.Sprintf("%f", cutoffScore))
-	pipe.Expire(ctx, cellZSetKey, s.options.DemandTTL)
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "reconcile_pipeline_failed")
-		return fmt.Errorf("failed to execute demand reconciliation pipeline for cell %s: %w", cellID, err)
+		span.SetStatus(codes.Error, "reconcile_script_failed")
+		return fmt.Errorf("failed to reconcile demand for cell %s: %w", cellID, err)
 	}
 
 	span.SetStatus(codes.Ok, "cell_demand_reconciled")

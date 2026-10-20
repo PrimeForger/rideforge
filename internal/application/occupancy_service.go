@@ -174,3 +174,28 @@ func (s *OccupancyService) DetectHotCells(
 
 	return hotCells, nil
 }
+
+// RefreshActiveCellMetrics recomputes the hot and warm gauges from Redis-derived occupancy.
+func (s *OccupancyService) RefreshActiveCellMetrics(ctx context.Context) error {
+	cells, err := s.store.ListDemandCells(ctx)
+	if err != nil {
+		return err
+	}
+	occupancies, err := s.store.GetMultiCellOccupancy(ctx, cells)
+	if err != nil {
+		return err
+	}
+
+	counts := map[occupancy.CellStatus]float64{
+		occupancy.StatusHot:  0,
+		occupancy.StatusWarm: 0,
+	}
+	for _, occ := range occupancies {
+		if _, tracked := counts[occ.Status]; tracked {
+			counts[occ.Status]++
+		}
+	}
+	observability.HotCellsActiveTotal.WithLabelValues("hot").Set(counts[occupancy.StatusHot])
+	observability.HotCellsActiveTotal.WithLabelValues("warm").Set(counts[occupancy.StatusWarm])
+	return nil
+}

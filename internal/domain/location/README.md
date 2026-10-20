@@ -1,16 +1,16 @@
 # Location Domain (`internal/domain/location`)
 
 ## Purpose
-Encapsulates geographic coordinates, GPS accuracy metrics, bearing, and basic coordinate validation.
+Encapsulates geographic coordinates and coordinate validation.
 
 ## Public Interface
-`Location` struct (`Latitude`, `Longitude`, `Bearing`, `Accuracy`, `Timestamp`), `IsValid() bool`.
+`Coordinate` struct (`Lat`, `Lng`), `Coordinate.IsValid() bool`, and `Coordinate.DistanceTo(other Coordinate) float64`.
 
 ## Dependencies
-`time`. Pure domain.
+Standard library `math`. Pure domain.
 
 ## Invariants & Gotchas
-Latitude must strictly lie in [-90.0, 90.0] and Longitude in [-180.0, 180.0]. Point (0.0, 0.0) is treated as an invalid GPS null-island glitch and rejected.
+Latitude and longitude must be finite and within inclusive geographic bounds ([-90, 90] and [-180, 180]). Point (0, 0) is treated as an invalid GPS null-island sentinel and rejected by `Coordinate.IsValid`.
 
 ## Human-Approval Required
 No.

@@ -17,10 +17,7 @@ func NewOutboxRepository(db *sql.DB) *OutboxRepository {
 }
 
 func (o *OutboxRepository) Insert(ctx context.Context, tx *sql.Tx, e *outbox.Event) error {
-	query := `
-	INSERT INTO outbox_events (id, aggregate_id, event_type, payload, created_at, published, processed_at)
-	VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`
+	query := outboxInsert
 
 	_, err := tx.ExecContext(ctx, query,
 		e.ID,
@@ -36,14 +33,7 @@ func (o *OutboxRepository) Insert(ctx context.Context, tx *sql.Tx, e *outbox.Eve
 }
 
 func (o *OutboxRepository) GetUnpublishedTx(ctx context.Context, tx *sql.Tx) ([]*outbox.Event, error) {
-	query := `
-	SELECT id, aggregate_id, event_type, payload, created_at, published, processed_at
-	FROM outbox_events
-	WHERE published = false
-	ORDER BY created_at ASC
-	FOR UPDATE SKIP LOCKED
-	LIMIT 50
-	`
+	query := outboxGetUnpublishedTx
 
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
@@ -76,9 +66,7 @@ func (o *OutboxRepository) GetUnpublishedTx(ctx context.Context, tx *sql.Tx) ([]
 
 func (o *OutboxRepository) MarkPublishedTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) error {
 	_, err := tx.ExecContext(ctx,
-		`UPDATE outbox_events 
-		SET published = true, processed_at = NOW()
-		WHERE id = $1`,
+		outboxMarkPublishedTx,
 		id,
 	)
 	return err

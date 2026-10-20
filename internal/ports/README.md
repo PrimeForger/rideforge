@@ -4,13 +4,13 @@
 Defines the abstract interface contracts (inbound and outbound ports) that decouple business logic from databases, message queues, caches, and external networks.
 
 ## Public Interface
-Interfaces: `RideRepository`, `DriverRepository`, `DriverLocker`, `H3DriverIndex`, `CellDemandStore`, `CellOccupancyStore`, `EventBus`, `OutboxRepository`, `DriverOfferGateway`, `PushNotifier`, `DriverMetricsRepository`, `DriverOfflineCommander`, `DriverPushTokenRepository`.
+Interfaces include `RideRepository`, `DriverRepository`, `DriverLocker`, `H3DriverIndex`, `RealtimeDriverCache`, `CellDemandStore`, `CellOccupancyStore`, `LocalityRepository`, `LocalityResolver`, `LocalityBoundaryIndexer`, `H3CellResolver`, `SurgePolicyRepository`, `SurgePolicyProvider`, `SurgeObserver`, and event ports. Demand-store cell listing supports recovery of Redis-only stale state.
 
 ## Dependencies
-`context`, standard domain packages (`domain/driver`, `domain/ride`, `domain/occupancy`, `domain/outbox`). Strictly no infrastructure or third-party library imports.
+`context`, standard domain packages (including locality and surge policy), and `github.com/google/uuid`. No infrastructure imports.
 
 ## Invariants & Gotchas
-All I/O operations must accept `context.Context` as their first parameter and return `error` as their last. Interfaces must model domain capabilities, not storage technologies.
+All I/O operations accept `context.Context` first. Interfaces model domain capabilities, not storage technologies. Locality resolution reports unresolved and ambiguous cells explicitly so callers never select an arbitrary match.
 
 ## Human-Approval Required
 Yes. Modifying port contracts impacts all infrastructure adapters and use-case orchestrators across the platform.

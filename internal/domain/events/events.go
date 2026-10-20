@@ -7,7 +7,9 @@ type Event interface {
 }
 
 type RideRequestedEvent struct {
-	RideID uuid.UUID
+	RideID          uuid.UUID `json:"ride_id"`
+	PickupLatitude  float64   `json:"pickup_latitude"`
+	PickupLongitude float64   `json:"pickup_longitude"`
 }
 
 func (e RideRequestedEvent) Name() string {
@@ -15,8 +17,8 @@ func (e RideRequestedEvent) Name() string {
 }
 
 type RideAcceptedEvent struct {
-	RideID   uuid.UUID
-	DriverID uuid.UUID
+	RideID   uuid.UUID `json:"ride_id"`
+	DriverID uuid.UUID `json:"driver_id"`
 }
 
 func (e RideAcceptedEvent) Name() string {

@@ -310,6 +310,29 @@ func (c *DriverCache) MarkOnline(
 	return err
 }
 
+func (c *DriverCache) MarkBusy(ctx context.Context, driverID uuid.UUID) error {
+	key := "driver:" + driverID.String()
+	pipe := c.client.GetRaw().TxPipeline()
+	pipe.HSet(ctx, key, map[string]interface{}{
+		"status":     "BUSY",
+		"updated_at": time.Now().Unix(),
+	})
+	pipe.SRem(ctx, "drivers:online", driverID.String())
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *DriverCache) IsAvailable(ctx context.Context, driverID uuid.UUID) (bool, error) {
+	status, err := c.client.GetRaw().HGet(ctx, "driver:"+driverID.String(), "status").Result()
+	if err == goredis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "ONLINE", nil
+}
+
 func (c *DriverCache) MarkOffline(
 	ctx context.Context,
 	driverID uuid.UUID,

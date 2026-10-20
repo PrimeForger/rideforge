@@ -8,24 +8,28 @@ import (
 )
 
 type Ride struct {
-	ID        uuid.UUID
-	DriverID  uuid.UUID
-	RiderID   uuid.UUID
-	Status    Status
-	Version   int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID              uuid.UUID
+	DriverID        uuid.UUID
+	RiderID         uuid.UUID
+	PickupLatitude  float64
+	PickupLongitude float64
+	Status          Status
+	Version         int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
-func NewRide(riderID uuid.UUID) *Ride {
+func NewRide(riderID uuid.UUID, pickupLatitude, pickupLongitude float64) *Ride {
 	now := time.Now()
 
 	return &Ride{
-		ID:        uuid.New(),
-		RiderID:   riderID,
-		Status:    StatusRequested,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              uuid.New(),
+		RiderID:         riderID,
+		PickupLatitude:  pickupLatitude,
+		PickupLongitude: pickupLongitude,
+		Status:          StatusRequested,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 }
 

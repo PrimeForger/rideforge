@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ashadashraf/ride-hail-app/internal/config"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/location"
 	appgeo "github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
 	"github.com/google/uuid"
@@ -62,7 +63,7 @@ func (s *DriverLocationService) ProcessRealtimeLocation(
 		attribute.Int64("location.seq", seq),
 	)
 
-	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+	if !(location.Coordinate{Lat: lat, Lng: lng}).IsValid() {
 		span.SetAttributes(attribute.String("location.reject_reason", "invalid_coordinates"))
 		span.SetStatus(codes.Ok, "rejected_invalid_coordinates")
 		return ErrInvalidCoordinates
@@ -150,7 +151,7 @@ func (s *DriverLocationService) PersistLocation(
 		attribute.Float64("location.lng", lng),
 	)
 
-	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+	if !(location.Coordinate{Lat: lat, Lng: lng}).IsValid() {
 		span.SetAttributes(attribute.String("location.reject_reason", "invalid_coordinates"))
 		span.SetStatus(codes.Ok, "rejected_invalid_coordinates")
 		return ErrInvalidCoordinates
@@ -214,6 +215,17 @@ func (s *DriverLocationService) updateSpatialIndexes(
 		return nil
 	}
 
+	available, err := s.driverCache.IsAvailable(ctx, driverID)
+	if err != nil {
+		return err
+	}
+	if !available {
+		if _, err := s.h3Index.RemoveDriver(ctx, driverID); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	ctx, h3Span := spatialTracer.Start(ctx, "h3.cell.update")
 	defer h3Span.End()
 
@@ -253,4 +265,15 @@ func (s *DriverLocationService) updateSpatialIndexes(
 	}
 
 	return err
+}
+
+func (s *DriverLocationService) MarkAvailable(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+) error {
+	if err := s.driverCache.MarkOnline(ctx, driverID, lat, lng); err != nil {
+		return err
+	}
+	return s.PersistLocation(ctx, driverID, lat, lng)
 }

@@ -282,6 +282,22 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	SurgeDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "surge_decisions_total",
+			Help: "Surge quote multipliers applied or safely omitted by reason",
+		},
+		[]string{"result"},
+	)
+
+	SurgePolicyRefreshesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "surge_policy_refreshes_total",
+			Help: "Surge policy snapshot refresh attempts by result",
+		},
+		[]string{"result"},
+	)
 )
 
 var (
@@ -317,6 +333,8 @@ var (
 		HotCellClassificationsTotal,
 		CellImbalanceRatio,
 		HotCellsActiveTotal,
+		SurgeDecisionsTotal,
+		SurgePolicyRefreshesTotal,
 	}
 
 	registerOnce sync.Once

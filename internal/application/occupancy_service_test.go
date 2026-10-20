@@ -8,6 +8,8 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/application"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/occupancy"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type mockOccupancyStore struct {
@@ -20,6 +22,16 @@ func newMockOccupancyStore() *mockOccupancyStore {
 		supplies: make(map[string]int),
 		demands:  make(map[string]int),
 	}
+}
+
+func (m *mockOccupancyStore) ListDemandCells(ctx context.Context) ([]string, error) {
+	cells := make([]string, 0, len(m.demands))
+	for cellID, demand := range m.demands {
+		if demand > 0 {
+			cells = append(cells, cellID)
+		}
+	}
+	return cells, nil
 }
 
 func (m *mockOccupancyStore) GetCellSupply(ctx context.Context, cellID string) (int, error) {
@@ -259,5 +271,35 @@ func TestOccupancyService_Concurrency(t *testing.T) {
 
 	for i := 0; i < concurrency; i++ {
 		<-done
+	}
+}
+
+func TestOccupancyService_RefreshActiveCellMetrics(t *testing.T) {
+	store := newMockOccupancyStore()
+	store.supplies["hot"] = 0
+	store.demands["hot"] = 3
+	store.supplies["warm"] = 10
+	store.demands["warm"] = 13
+	store.supplies["normal"] = 10
+	store.demands["normal"] = 5
+
+	service := application.NewOccupancyService(store, geo.NewH3Service(8, 1), nil)
+	if err := service.RefreshActiveCellMetrics(context.Background()); err != nil {
+		t.Fatalf("RefreshActiveCellMetrics() error = %v", err)
+	}
+
+	hotMetric := &dto.Metric{}
+	if err := observability.HotCellsActiveTotal.WithLabelValues("hot").Write(hotMetric); err != nil {
+		t.Fatal(err)
+	}
+	if got := hotMetric.GetGauge().GetValue(); got != 1 {
+		t.Errorf("hot-cell gauge = %v, want 1", got)
+	}
+	warmMetric := &dto.Metric{}
+	if err := observability.HotCellsActiveTotal.WithLabelValues("warm").Write(warmMetric); err != nil {
+		t.Fatal(err)
+	}
+	if got := warmMetric.GetGauge().GetValue(); got != 1 {
+		t.Errorf("warm-cell gauge = %v, want 1", got)
 	}
 }

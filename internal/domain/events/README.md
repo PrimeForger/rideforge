@@ -10,10 +10,10 @@ Defines the schema and payload contracts for all domain events published across 
 `github.com/google/uuid`, `time`.
 
 ## Invariants & Gotchas
-Event payloads must remain backward-compatible to prevent consumer deserialization failures during zero-downtime rolling upgrades.
+Ride request and acceptance event payloads use the current snake_case JSON contract (`ride_id`, `pickup_latitude`, `pickup_longitude`, and `driver_id`). In-repository producers and consumers change together; no legacy decoding is provided.
 
 ## Human-Approval Required
-No (unless changing existing field schemas in a breaking manner).
+No (unless changing existing field schemas).
 
 ## Related ADRs
 ADR-0005 (Event-Driven Architecture), ADR-0006 (Kafka / Redpanda for Event Streaming).

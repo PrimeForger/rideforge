@@ -174,11 +174,19 @@ func (m *mockGeoIndex) RemoveDriver(ctx context.Context, driverID uuid.UUID) err
 type mockDriverCache struct {
 	onlineIDs     []uuid.UUID
 	onlineIDsErr  error
+	onlineIDCalls int
 	cachedDrivers map[uuid.UUID]*driver.Driver
 	loadErr       error
+	markedOnline  []uuid.UUID
+}
+
+func (m *mockDriverCache) MarkOnline(_ context.Context, driverID uuid.UUID, _, _ float64) error {
+	m.markedOnline = append(m.markedOnline, driverID)
+	return nil
 }
 
 func (m *mockDriverCache) GetOnlineDriverIDs(ctx context.Context) ([]uuid.UUID, error) {
+	m.onlineIDCalls++
 	if m.onlineIDsErr != nil {
 		return nil, m.onlineIDsErr
 	}
@@ -234,9 +242,10 @@ func TestH3RecoveryService_SingleDriver(t *testing.T) {
 	h3Calc := &mockH3Calc{}
 	h3Idx := newMockH3Index()
 	geoIdx := newMockGeoIndex()
+	driverCache := &mockDriverCache{}
 	log := zap.NewNop()
 
-	svc := NewH3RecoveryService(repo, h3Calc, h3Idx, geoIdx, nil, log)
+	svc := NewH3RecoveryService(repo, h3Calc, h3Idx, geoIdx, driverCache, log)
 
 	res, err := svc.RebuildIndex(ctx)
 	if err != nil {
@@ -254,6 +263,12 @@ func TestH3RecoveryService_SingleDriver(t *testing.T) {
 
 	if loc, ok := geoIdx.locations[dID]; !ok || loc[0] != 12.9716 || loc[1] != 77.5946 {
 		t.Errorf("expected Geo location [12.9716, 77.5946], got %v", loc)
+	}
+	if len(driverCache.markedOnline) != 1 || driverCache.markedOnline[0] != dID {
+		t.Errorf("expected recovery to restore Redis ONLINE status for %s, got %v", dID, driverCache.markedOnline)
+	}
+	if driverCache.onlineIDCalls != 1 {
+		t.Errorf("GetOnlineDriverIDs called %d times, want once", driverCache.onlineIDCalls)
 	}
 }
 

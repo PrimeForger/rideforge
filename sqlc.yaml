@@ -1,0 +1,11 @@
+# Generate with sqlc v1.30.0. Keep generated Go files in the repository.
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/infrastructure/postgres/queries"
+    gen:
+      go:
+        package: "postgres"
+        out: "internal/infrastructure/postgres"
+        sql_package: "database/sql"

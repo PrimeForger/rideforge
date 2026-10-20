@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
@@ -29,9 +28,11 @@ func (h *RideHandler) CreateRide(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		RiderID string `json:"rider_id"`
-		From    string `json:"from_region"`
-		To      string `json:"to_region"`
+		RiderID         string   `json:"rider_id"`
+		PickupLatitude  *float64 `json:"pickup_latitude"`
+		PickupLongitude *float64 `json:"pickup_longitude"`
+		From            string   `json:"from_region"`
+		To              string   `json:"to_region"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -46,9 +47,11 @@ func (h *RideHandler) CreateRide(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rideID, err := h.rideService.CreateRide(
-		context.Background(),
+		r.Context(),
 		application.CreateRideRequest{
-			RiderID: riderUUID,
+			RiderID:         riderUUID,
+			PickupLatitude:  req.PickupLatitude,
+			PickupLongitude: req.PickupLongitude,
 		},
 		region.Region(req.From),
 		region.Region(req.To),

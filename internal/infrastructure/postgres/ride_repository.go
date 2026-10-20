@@ -20,18 +20,13 @@ func NewRideRepository(db *sql.DB) *RideRepository {
 
 func (r *RideRepository) Save(ctx context.Context, rideEntity *ride.Ride) error {
 
-	query := `
-	INSERT INTO rides (id, rider_id, driver_id, status, created_at, updated_at)
-	VALUES ($1, $2, $3, $4, $5, $6)
-	ON CONFLICT (id) DO UPDATE SET
-		driver_id = EXCLUDED.driver_id,
-		status = EXCLUDED.status,
-		updated_at = EXCLUDED.updated_at
-	`
+	query := rideSave
 	_, err := r.db.ExecContext(ctx, query,
 		rideEntity.ID,
 		rideEntity.RiderID,
 		rideEntity.DriverID,
+		rideEntity.PickupLatitude,
+		rideEntity.PickupLongitude,
 		string(rideEntity.Status),
 		rideEntity.CreatedAt,
 		rideEntity.UpdatedAt,
@@ -47,14 +42,13 @@ func (r *RideRepository) SaveTx(ctx context.Context, tx *sql.Tx, rideEntity *rid
 	// CASE 1: New Ride
 	if rideEntity.Version == 0 {
 
-		query := `
-		INSERT INTO rides (id, rider_id, driver_id, status, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		`
+		query := rideInsertTx
 		_, err := tx.ExecContext(ctx, query,
 			rideEntity.ID,
 			rideEntity.RiderID,
 			rideEntity.DriverID,
+			rideEntity.PickupLatitude,
+			rideEntity.PickupLongitude,
 			string(rideEntity.Status),
 			rideEntity.Version,
 			rideEntity.CreatedAt,
@@ -65,17 +59,12 @@ func (r *RideRepository) SaveTx(ctx context.Context, tx *sql.Tx, rideEntity *rid
 	}
 
 	// CASE 2: Existing Ride -> Optimistic Lock Update
-	query := `
-	UPDATE rides
-	SET driver_id = $1,
-		status = $2,
-		version = version + 1,
-		updated_at = $3
-	WHERE id = $4 AND version = $5
-	`
+	query := rideUpdateVersionedTx
 
 	res, err := tx.ExecContext(ctx, query,
 		rideEntity.DriverID,
+		rideEntity.PickupLatitude,
+		rideEntity.PickupLongitude,
 		string(rideEntity.Status),
 		time.Now(),
 		rideEntity.ID,
@@ -103,10 +92,7 @@ func (r *RideRepository) SaveTx(ctx context.Context, tx *sql.Tx, rideEntity *rid
 
 func (r *RideRepository) GetByID(ctx context.Context, id uuid.UUID) (*ride.Ride, error) {
 
-	query := `
-	SELECT id, rider_id, driver_id, status, created_at, updated_at
-	FROM rides WHERE id = $1
-	`
+	query := rideGetByID
 
 	row := r.db.QueryRowContext(ctx, query, id)
 
@@ -118,6 +104,8 @@ func (r *RideRepository) GetByID(ctx context.Context, id uuid.UUID) (*ride.Ride,
 		&rideEntity.ID,
 		&rideEntity.RiderID,
 		&driverID,
+		&rideEntity.PickupLatitude,
+		&rideEntity.PickupLongitude,
 		&status,
 		&rideEntity.CreatedAt,
 		&rideEntity.UpdatedAt,
@@ -139,10 +127,7 @@ func (r *RideRepository) GetByID(ctx context.Context, id uuid.UUID) (*ride.Ride,
 
 func (r *RideRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*ride.Ride, error) {
 
-	query := `
-	SELECT id, rider_id, driver_id, status, version, created_at, updated_at
-	FROM rides WHERE id = $1
-	`
+	query := rideGetByIDTx
 
 	row := tx.QueryRowContext(ctx, query, id)
 
@@ -154,6 +139,8 @@ func (r *RideRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID
 		&rideEntity.ID,
 		&rideEntity.RiderID,
 		&driverID,
+		&rideEntity.PickupLatitude,
+		&rideEntity.PickupLongitude,
 		&status,
 		&rideEntity.Version,
 		&rideEntity.CreatedAt,
@@ -175,11 +162,7 @@ func (r *RideRepository) GetByIDTx(ctx context.Context, tx *sql.Tx, id uuid.UUID
 }
 
 func (r *RideRepository) GetActiveRides(ctx context.Context) ([]*ride.Ride, error) {
-	query := `
-	SELECT id, rider_id, driver_id, status, version, created_at, updated_at
-	FROM rides
-	WHERE status IN ('REQUESTED', 'MATCHING')
-	`
+	query := rideGetActiveRides
 
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
@@ -198,6 +181,8 @@ func (r *RideRepository) GetActiveRides(ctx context.Context) ([]*ride.Ride, erro
 			&rideEntity.ID,
 			&rideEntity.RiderID,
 			&driverID,
+			&rideEntity.PickupLatitude,
+			&rideEntity.PickupLongitude,
 			&status,
 			&rideEntity.Version,
 			&rideEntity.CreatedAt,

@@ -1,7 +1,7 @@
 # HTTP & WebSocket Presentation Layer (`internal/server`)
 
 ## Purpose
-Handles incoming HTTP requests and WebSocket connections, validates parameters, and maps transport requests to application service calls and JSON responses.
+Handles incoming HTTP requests and WebSocket connections, validates parameters, and maps transport requests to application service calls and JSON responses. Ride creation requires pickup latitude and longitude.
 
 ## Public Interface
 `Server` struct, `NewServer(...) *Server`, `Start() error`, `Shutdown(ctx) error`, HTTP endpoints (`/rides`, `/drivers`, `/ws`).
