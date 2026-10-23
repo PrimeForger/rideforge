@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/ashadashraf/ride-hail-app/internal/application"
+	applicationlocation "github.com/ashadashraf/ride-hail-app/internal/application/location"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/domain/ride"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/redis"
@@ -34,7 +34,7 @@ type Client struct {
 	geo         *redis.GeoService
 	driverCache *redis.DriverCache
 
-	driverLocationService *application.DriverLocationService
+	driverLocationService *applicationlocation.DriverLocationService
 
 	send chan OutgoingMessage
 	done chan struct{}
@@ -52,7 +52,7 @@ func NewClient(
 	hub *Hub,
 	geo *redis.GeoService,
 	driverCache *redis.DriverCache,
-	driverLocationService *application.DriverLocationService,
+	driverLocationService *applicationlocation.DriverLocationService,
 	cfg *config.RealtimeConfig,
 ) *Client {
 	return &Client{
@@ -227,28 +227,28 @@ func (c *Client) handleLocation(ctx context.Context, msg IncomingMessage) error 
 	)
 
 	switch {
-	case errors.Is(err, application.ErrInvalidCoordinates):
+	case errors.Is(err, applicationlocation.ErrInvalidCoordinates):
 		span.SetAttributes(
 			attribute.String("location.drop_reason", "invalid_coordinates"),
 		)
 		span.SetStatus(codes.Ok, "dropped")
 		return nil
 
-	case errors.Is(err, application.ErrBadAccuracy):
+	case errors.Is(err, applicationlocation.ErrBadAccuracy):
 		span.SetAttributes(
 			attribute.String("location.drop_reason", "bad_accuracy"),
 		)
 		span.SetStatus(codes.Ok, "dropped")
 		return nil
 
-	case errors.Is(err, application.ErrInvalidSequence):
+	case errors.Is(err, applicationlocation.ErrInvalidSequence):
 		span.SetAttributes(
 			attribute.String("location.drop_reason", "invalid_sequence"),
 		)
 		span.SetStatus(codes.Ok, "dropped")
 		return nil
 
-	case errors.Is(err, application.ErrStaleSequence):
+	case errors.Is(err, applicationlocation.ErrStaleSequence):
 		span.SetAttributes(
 			attribute.String("location.drop_reason", "stale_sequence"),
 		)

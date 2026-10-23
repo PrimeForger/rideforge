@@ -1,0 +1,184 @@
+package driver
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+
+	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
+	"github.com/ashadashraf/ride-hail-app/internal/application/location"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/driver"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/events"
+	"github.com/ashadashraf/ride-hail-app/internal/domain/outbox"
+	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/postgres"
+	"github.com/ashadashraf/ride-hail-app/internal/ports"
+	"github.com/google/uuid"
+)
+
+type DriverService struct {
+	driverRepo            ports.DriverRepository
+	txManager             *postgres.TxManager
+	outboxRepo            ports.OutboxRepository
+	driverLocationService *location.DriverLocationService
+}
+
+func NewDriverService(
+	driverRepo ports.DriverRepository,
+	txManager *postgres.TxManager,
+	outboxRepo ports.OutboxRepository,
+	driverLocationService *location.DriverLocationService,
+) *DriverService {
+	return &DriverService{
+		driverRepo:            driverRepo,
+		txManager:             txManager,
+		outboxRepo:            outboxRepo,
+		driverLocationService: driverLocationService,
+	}
+}
+
+func (s *DriverService) GoOnline(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+) error {
+
+	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+		driver, err := s.driverRepo.GetByIDTx(ctx, tx, driverID)
+		if err != nil {
+			return err
+		}
+
+		driver.GoOnline()
+
+		if err := s.driverRepo.SaveTx(ctx, tx, driver); err != nil {
+			return err
+		}
+
+		// Emit event
+		event := events.DriverOnlineEvent{
+			DriverID: driverID,
+			Lat:      lat,
+			Lng:      lng,
+		}
+
+		return s.emitEvent(ctx, tx, driverID, event)
+	})
+}
+
+func (s *DriverService) GoOffline(
+	ctx context.Context,
+	driverID uuid.UUID,
+	reason string,
+) error {
+
+	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+		driver, err := s.driverRepo.GetByIDTx(ctx, tx, driverID)
+		if err != nil {
+			return err
+		}
+
+		driver.GoOffline()
+
+		if err := s.driverRepo.SaveTx(ctx, tx, driver); err != nil {
+			return err
+		}
+
+		event := events.DriverOfflineEvent{
+			DriverID: driverID,
+			Reason:   reason,
+		}
+
+		return s.emitEvent(ctx, tx, driverID, event)
+	})
+}
+
+func (s *DriverService) UpdateLocation(
+	ctx context.Context,
+	driverID uuid.UUID,
+	lat, lng float64,
+) error {
+
+	return s.driverLocationService.PersistLocation(
+		ctx,
+		driverID,
+		lat,
+		lng,
+	)
+}
+
+// func (s *DriverService) AssignRide(
+// 	ctx context.Context,
+// 	driverID uuid.UUID,
+// ) error {
+
+// 	return s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+
+// 		driver, err := s.driverRepo.GetByID(ctx, driverID)
+// 		if err != nil {
+// 			return err
+// 		}
+
+// 		if err := driver.AssignRide(); err != nil {
+// 			return err
+// 		}
+
+// 		return s.driverRepo.Save(ctx, driver)
+// 	})
+// }
+
+func (s *DriverService) CompleteRide(
+	ctx context.Context,
+	driverID uuid.UUID,
+) error {
+	var completedDriver *driver.Driver
+	err := s.txManager.WithinTx(ctx, func(tx *sql.Tx) error {
+		driver, err := s.driverRepo.GetByIDTx(ctx, tx, driverID)
+		if err != nil {
+			return err
+		}
+
+		driver.CompleteRide()
+
+		if err := s.driverRepo.SaveTx(ctx, tx, driver); err != nil {
+			return err
+		}
+		completedDriver = driver
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if completedDriver == nil {
+		return errors.New("completed driver was not loaded")
+	}
+	return s.driverLocationService.MarkAvailable(ctx, driverID, completedDriver.Lat, completedDriver.Lng)
+}
+
+func (s *DriverService) emitEvent(
+	ctx context.Context,
+	tx *sql.Tx,
+	driverID uuid.UUID,
+	event events.Event,
+) error {
+
+	envelope := appevents.Envelope{
+		ID:        uuid.NewString(),
+		Type:      event.Name(),
+		Aggregate: driverID.String(),
+		Data:      event,
+		Occurred:  time.Now(),
+	}
+
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+
+	return s.outboxRepo.Insert(ctx, tx,
+		outbox.NewEvent(driverID, envelope.Type, payload),
+	)
+}

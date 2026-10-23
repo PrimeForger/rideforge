@@ -7,7 +7,13 @@ import (
 	"time"
 
 	"github.com/ashadashraf/ride-hail-app/internal/application"
+	applicationdemand "github.com/ashadashraf/ride-hail-app/internal/application/demand"
+	applicationdriver "github.com/ashadashraf/ride-hail-app/internal/application/driver"
+	applicationlocality "github.com/ashadashraf/ride-hail-app/internal/application/locality"
+	applicationlocation "github.com/ashadashraf/ride-hail-app/internal/application/location"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
+	applicationoccupancy "github.com/ashadashraf/ride-hail-app/internal/application/occupancy"
+	applicationsurge "github.com/ashadashraf/ride-hail-app/internal/application/surge"
 	"github.com/ashadashraf/ride-hail-app/internal/bootstrap/builders"
 	"github.com/ashadashraf/ride-hail-app/internal/config"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/geo"
@@ -26,13 +32,13 @@ type Container struct {
 
 	RideService                  *application.RideService
 	MatchingEngine               *application.MatchingEngine
-	DriverService                *application.DriverService
-	DriverResponseService        *application.DriverResponseService
-	DriverResponseCommandService *application.DriverResponseCommandService
-	DriverLocationService        *application.DriverLocationService
-	DriverDeviceService          *application.DriverDeviceService
-	DriverMetricsService         *application.DriverMetricsService
-	H3RecoveryService            *application.H3RecoveryService
+	DriverService                *applicationdriver.DriverService
+	DriverResponseService        *applicationdriver.DriverResponseService
+	DriverResponseCommandService *applicationdriver.DriverResponseCommandService
+	DriverLocationService        *applicationlocation.DriverLocationService
+	DriverDeviceService          *applicationdriver.DriverDeviceService
+	DriverMetricsService         *applicationdriver.DriverMetricsService
+	H3RecoveryService            *applicationlocation.H3RecoveryService
 	GeoService                   *redis.GeoService
 	DriverCache                  *redis.DriverCache
 
@@ -51,19 +57,19 @@ type Container struct {
 
 	RealtimeHub                *realtime.Hub
 	HeartbeatRecoveryWorker    *realtime.HeartbeatRecoveryWorker
-	H3ReconciliationWorker     *application.H3ReconciliationWorker
-	DemandReconciliationWorker *application.DemandReconciliationWorker
+	H3ReconciliationWorker     *applicationlocation.H3ReconciliationWorker
+	DemandReconciliationWorker *applicationdemand.DemandReconciliationWorker
 	DemandStore                ports.CellDemandStore
-	DemandService              *application.DemandService
-	DemandRecoveryService      *application.DemandRecoveryService
-	LocalityService            *application.LocalityService
+	DemandService              *applicationdemand.DemandService
+	DemandRecoveryService      *applicationdemand.DemandRecoveryService
+	LocalityService            *applicationlocality.LocalityService
 	LocalityRepository         *postgres.LocalityRepository
 	SurgePolicyRepository      *postgres.SurgePolicyRepository
-	SurgePolicyCache           *application.SurgePolicyCache
-	SurgePolicyRefreshWorker   *application.SurgePolicyRefreshWorker
-	SurgeService               *application.SurgeService
+	SurgePolicyCache           *applicationsurge.SurgePolicyCache
+	SurgePolicyRefreshWorker   *applicationsurge.SurgePolicyRefreshWorker
+	SurgeService               *applicationsurge.SurgeService
 	OccupancyStore             ports.CellOccupancyStore
-	OccupancyService           *application.OccupancyService
+	OccupancyService           *applicationoccupancy.OccupancyService
 	Config                     *config.Config
 
 	Logger *zap.Logger
@@ -206,31 +212,31 @@ func NewContainer() (*Container, error) {
 
 	matchingEngine := application.NewMatchingEngine(driverRepo, driverLocker, outboxRepo, candidateSearcher, candidatePipeline, cfg, retryPolicy, log)
 
-	driverLocationService := application.NewDriverLocationService(geoService, driverCache, h3Service, h3Index, cfg)
-	driverService := application.NewDriverService(driverRepo, txManager, outboxRepo, driverLocationService)
-	driverResponseService := application.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)
-	driverResponseCommandService := application.NewDriverResponseCommandService(txManager, outboxRepo)
-	driverDeviceService := application.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
-	driverMetricsService := application.NewDriverMetricsService(txManager, metricsRepo, driverCache)
-	h3RecoveryService := application.NewH3RecoveryService(driverRepo, h3Service, h3Index, geoService, driverCache, log)
+	driverLocationService := applicationlocation.NewDriverLocationService(geoService, driverCache, h3Service, h3Index, cfg)
+	driverService := applicationdriver.NewDriverService(driverRepo, txManager, outboxRepo, driverLocationService)
+	driverResponseService := applicationdriver.NewDriverResponseService(rideRepo, driverRepo, driverLocker, outboxRepo, log)
+	driverResponseCommandService := applicationdriver.NewDriverResponseCommandService(txManager, outboxRepo)
+	driverDeviceService := applicationdriver.NewDriverDeviceService(txManager, driverPushTokenRepo, outboxRepo)
+	driverMetricsService := applicationdriver.NewDriverMetricsService(txManager, metricsRepo, driverCache)
+	h3RecoveryService := applicationlocation.NewH3RecoveryService(driverRepo, h3Service, h3Index, geoService, driverCache, log)
 
-	demandService := application.NewDemandService(demandStore, h3Service, log)
-	demandRecoveryService := application.NewDemandRecoveryService(rideRepo, h3Service, demandStore, log)
+	demandService := applicationdemand.NewDemandService(demandStore, h3Service, log)
+	demandRecoveryService := applicationdemand.NewDemandRecoveryService(rideRepo, h3Service, demandStore, log)
 
-	occupancyService := application.NewOccupancyService(occupancyStore, h3Service, log)
-	localityService := application.NewLocalityService(localityRepo, localityRepo)
+	occupancyService := applicationoccupancy.NewOccupancyService(occupancyStore, h3Service, log)
+	localityService := applicationlocality.NewLocalityService(localityRepo, localityRepo)
 	surgeMetrics := observability.SurgeMetrics{}
-	surgePolicyCache := application.NewSurgePolicyCache(
+	surgePolicyCache := applicationsurge.NewSurgePolicyCache(
 		surgePolicyRepo,
 		time.Duration(cfg.SurgePolicy.MaxStalenessSeconds)*time.Second,
 	)
-	surgePolicyRefreshWorker := application.NewSurgePolicyRefreshWorker(
+	surgePolicyRefreshWorker := applicationsurge.NewSurgePolicyRefreshWorker(
 		surgePolicyCache,
 		time.Duration(cfg.SurgePolicy.RefreshIntervalSeconds)*time.Second,
 		surgeMetrics,
 		log,
 	)
-	surgeService := application.NewSurgeService(h3Service, localityRepo, surgePolicyCache, occupancyService, surgeMetrics, log)
+	surgeService := applicationsurge.NewSurgeService(h3Service, localityRepo, surgePolicyCache, occupancyService, surgeMetrics, log)
 
 	// -- Handlers --
 	rideEventHandler := matching.NewRideEventHandler(timeoutScheduler)
@@ -239,13 +245,13 @@ func NewContainer() (*Container, error) {
 	heartbeatRecoveryWorker := realtime.NewHeartbeatRecoveryWorker(
 		driverCache, driverService, time.Duration(cfg.Realtime.HeartbeatRecoveryIntervalSeconds)*time.Second, log,
 	)
-	h3ReconciliationWorker := application.NewH3ReconciliationWorker(
+	h3ReconciliationWorker := applicationlocation.NewH3ReconciliationWorker(
 		h3RecoveryService,
 		cfg.H3.ReconciliationEnabled,
 		time.Duration(cfg.H3.ReconciliationIntervalSeconds)*time.Second,
 		log,
 	)
-	demandReconciliationWorker := application.NewDemandReconciliationWorker(
+	demandReconciliationWorker := applicationdemand.NewDemandReconciliationWorker(
 		demandRecoveryService,
 		occupancyService,
 		cfg.Demand.ReconciliationEnabled,

@@ -1,7 +1,7 @@
 # RideForge — Living System Status
 
 > **Document Type:** Living Operational Status & Next Tasks  
-> **Last Updated:** 2026-10-20
+> **Last Updated:** 2026-10-24
 > **Rule for AI Agents:** Read this file first when starting a session to orient on current state. Only mark tasks "Done" after automated tests/builds pass. Never append past session history here (use `docs/sessions/YYYY-MM-DD.md` for session archives).
 
 ---
@@ -10,7 +10,7 @@
 
 * **Active Phase:** Phase 1 — Core Dispatch Engine & Spatial State
 * **Active Milestone:** Milestone 2 — Adaptive Candidate Search & Density-Aware Expansion
-* **Recent Subsystem Focus:** Driver Occupancy & Ride Demand Tracking (`internal/domain/occupancy/`, `internal/application/demand_service.go`)
+* **Recent Subsystem Focus:** Driver Occupancy & Ride Demand Tracking (`internal/domain/occupancy/`, `internal/application/demand/`)
 
 ---
 
@@ -26,6 +26,8 @@
 * [x] **Stage 7 Phase B Occupancy Corrections:** Redis occupancy reads recover after script-cache loss and propagate command failures; available-driver supply excludes busy drivers and H3 membership cleanup works on cell moves/removal; reconciliation refreshes active hot/warm cell gauges. Full tests, vet, and coverage pass. Phase C implementation is authorized and underway.
 * [x] **Stage 7 Phase C Locality Surge (Complete within approved scope):** PostGIS boundaries and operational-resolution H3 mappings update atomically; locality resolution is deterministic; PostgreSQL policy schedules reject overlapping active periods; invalid refreshes retain the last known-good snapshot until maximum staleness; active policies require valid tiers; surge uses Phase B occupancy and falls back to 1.00x for invalid or unavailable inputs. Quote/fare integration is deferred because no quote operation exists and pricing API work is outside this phase. Full tests, vet, and coverage pass. Windows race linking is unavailable in this environment.
 * [x] **PostgreSQL Migration and Query Layout:** Root `migrations/` versions 000001–000005 are the schema authority; `sqlc` v1.30.0 validates grouped SQL files and generates repository query code. Fresh PostGIS `up`, full `down`, and `up` passed; the final application tables, constraints, and indexes match the schema snapshot. Live ride persistence and driver UUID-array lookup passed against the migrated schema. The PostgreSQL package, full Go suite, vet, and coverage checks passed with the documented Windows linker setting. A CI workflow was added for migration order, rollback, query generation, and live adapter smoke tests.
+* [x] **Application Package Cohesion:** Demand, driver, location, locality, occupancy, and surge orchestration now live in focused `internal/application/<feature>/` packages. Matching/dispatch hierarchies and the central ports package remain unchanged. Affected package compilation and focused demand, locality, and surge tests passed; `go vet` passed for the affected packages.
+* [x] **HTTP Transport Foundation:** HTTP route composition and ride, driver, and WebSocket handlers moved from `internal/server/` into `internal/transport/http/`. The API entrypoint uses the new package, and `go build -buildvcs=false -ldflags=-linkmode=internal ./...` passed. The registered route paths are unchanged.
 
 ---
 

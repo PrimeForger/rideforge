@@ -10,7 +10,7 @@ Executable entrypoint (`main()`). Exposes the HTTP REST API, `/ws` WebSocket gat
 
 ## Dependencies
 
-Relies on `internal/bootstrap` for dependency injection, `internal/server` for HTTP/WS routing, `internal/infrastructure/observability` for telemetry, `internal/infrastructure/kafka` for consumers, and `internal/infrastructure/outbox` for event publishing.
+Relies on `internal/bootstrap` for dependency injection, `internal/transport/http` for HTTP/WS routing, `internal/infrastructure/observability` for telemetry, `internal/infrastructure/kafka` for consumers, and `internal/infrastructure/outbox` for event publishing.
 
 ## Invariants & Gotchas
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ashadashraf/ride-hail-app/internal/application/demand"
+	applicationdriver "github.com/ashadashraf/ride-hail-app/internal/application/driver"
 	appevents "github.com/ashadashraf/ride-hail-app/internal/application/events"
 	"github.com/ashadashraf/ride-hail-app/internal/application/matching"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
@@ -27,13 +29,13 @@ type EventRouter struct {
 	matchingEngine        *MatchingEngine
 	rideEventHandler      *matching.RideEventHandler
 	driverOfferHandler    *matching.DriverOfferHandler
-	driverResponseService *DriverResponseService
-	driverMetricsService  *DriverMetricsService
+	driverResponseService *applicationdriver.DriverResponseService
+	driverMetricsService  *applicationdriver.DriverMetricsService
 
 	geoService    *redis.GeoService
 	driverCache   *redis.DriverCache
 	h3Index       *redis.H3DriverIndex
-	demandService *DemandService
+	demandService *demand.DemandService
 	driverLocker  interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	}
@@ -48,12 +50,12 @@ func NewEventRouter(
 	matchingEngine *MatchingEngine,
 	rideEventHandler *matching.RideEventHandler,
 	driverOfferHandler *matching.DriverOfferHandler,
-	driverResponseService *DriverResponseService,
-	driverMetricsService *DriverMetricsService,
+	driverResponseService *applicationdriver.DriverResponseService,
+	driverMetricsService *applicationdriver.DriverMetricsService,
 	geoService *redis.GeoService,
 	driverCache *redis.DriverCache,
 	h3Index *redis.H3DriverIndex,
-	demandService *DemandService,
+	demandService *demand.DemandService,
 	driverLocker interface {
 		ForceRelease(ctx context.Context, driverID uuid.UUID) error
 	},
@@ -129,7 +131,7 @@ func (r *EventRouter) Handle(ctx context.Context, envelope appevents.Envelope) e
 	}
 
 	if envelope.Type == "ride.requested" || envelope.Type == "ride.accepted" {
-		if err := processDemandProjection(ctx, envelope, r.demandService, r.processedEventRepo); err != nil {
+		if err := demand.ProcessProjection(ctx, envelope, r.demandService, r.processedEventRepo); err != nil {
 			return fail(err, "demand_projection_failed")
 		}
 	}

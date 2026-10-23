@@ -16,7 +16,7 @@ import (
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/kafka"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/observability"
 	"github.com/ashadashraf/ride-hail-app/internal/infrastructure/outbox"
-	"github.com/ashadashraf/ride-hail-app/internal/server"
+	httptransport "github.com/ashadashraf/ride-hail-app/internal/transport/http"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -65,7 +65,7 @@ func main() {
 		mux.Handle("/metrics", promhttp.Handler())
 	}
 
-	srv := server.NewServer(
+	srv := httptransport.NewServer(
 		container.RideService,
 		container.DriverService,
 		container.DriverResponseCommandService,
